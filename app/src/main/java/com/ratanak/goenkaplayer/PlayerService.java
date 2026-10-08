@@ -10,6 +10,8 @@ import android.content.pm.ServiceInfo;
 import android.graphics.drawable.Icon;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
+import android.media.AudioFormat;
+import android.media.AudioTrack;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.os.Build;
@@ -45,12 +47,76 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     private AudioFocusRequest focusRequest;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
+    private int tick;
+    private KeepAlive keepAlive;
+
+    /** Every second: keep the quiet "keep-alive" sound in step with playback; save position every 5 s. */
     private final Runnable saver = new Runnable() {
         @Override public void run() {
-            savePosition();
-            handler.postDelayed(this, 5000);
+            if (isPlaying()) startKeepAlive(); else stopKeepAlive();
+            if (++tick % 5 == 0) savePosition();
+            handler.postDelayed(this, 1000);
         }
     };
+
+    /**
+     * Plays an extremely quiet hiss (about -70 dB, not audible) while a lesson is playing.
+     * Some phones freeze a player when its output is pure digital silence for a while;
+     * this keeps real audio flowing so playback continues through the 10-minute silences.
+     */
+    private static final class KeepAlive extends Thread {
+        private volatile boolean running = true;
+
+        @Override public void run() {
+            int sr = 22050;
+            int min = AudioTrack.getMinBufferSize(sr, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            AudioTrack track = null;
+            try {
+                track = new AudioTrack.Builder()
+                        .setAudioAttributes(new AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build())
+                        .setAudioFormat(new AudioFormat.Builder()
+                                .setSampleRate(sr)
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                .build())
+                        .setBufferSizeInBytes(Math.max(min, sr))
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .build();
+                track.play();
+                short[] buf = new short[sr / 10];
+                java.util.Random rnd = new java.util.Random();
+                while (running) {
+                    for (int i = 0; i < buf.length; i++) buf[i] = (short) (rnd.nextInt(25) - 12);
+                    track.write(buf, 0, buf.length);
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (track != null) {
+                    try { track.stop(); } catch (Exception ignored) {}
+                    track.release();
+                }
+            }
+        }
+
+        void finish() { running = false; }
+    }
+
+    private void startKeepAlive() {
+        if (keepAlive == null) {
+            keepAlive = new KeepAlive();
+            keepAlive.start();
+        }
+    }
+
+    private void stopKeepAlive() {
+        if (keepAlive != null) {
+            keepAlive.finish();
+            keepAlive = null;
+        }
+    }
 
     @Override
     public void onCreate() {
@@ -61,7 +127,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         NotificationChannel ch = new NotificationChannel(CHANNEL, "Playback", NotificationManager.IMPORTANCE_LOW);
         ch.setShowBadge(false);
         nm.createNotificationChannel(ch);
-        handler.postDelayed(saver, 5000);
+        handler.postDelayed(saver, 1000);
     }
 
     @Override
@@ -111,7 +177,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         mp.setOnPreparedListener(p -> {
             prepared = true;
             if (seek > 0 && seek < p.getDuration()) p.seekTo((int) seek);
-            if (requestFocus()) p.start();
+            if (requestFocus()) { p.start(); startKeepAlive(); }
             updateNotification();
         });
         mp.setOnCompletionListener(p -> {
@@ -204,6 +270,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     }
 
     private void stopAll() {
+        stopKeepAlive();
         savePosition();
         releasePlayer();
         abandonFocus();
@@ -309,6 +376,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     @Override
     public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        stopKeepAlive();
         savePosition();
         releasePlayer();
         abandonFocus();
