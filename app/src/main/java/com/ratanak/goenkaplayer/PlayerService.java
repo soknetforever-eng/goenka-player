@@ -1,5 +1,6 @@
 package com.ratanak.goenkaplayer;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -32,6 +33,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     public static final String ACTION_NEXT = "next";
     public static final String ACTION_PREV = "prev";
     public static final String ACTION_STOP = "stop";
+    public static final String ACTION_RESUME = "resume_after_silence";
     public static final String EXTRA_INDEX = "index";
     public static final String EXTRA_POS = "pos";
 
@@ -73,6 +75,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     public long talkRemaining() { return Math.max(0, talkMs() - talkedMs); }
 
     private void resetCycle() {
+        cancelResumeAlarm();
         talkedMs = 0;
         lastPos = -1;
         inSilence = false;
@@ -96,6 +99,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
                             savePosition();
                             inSilence = true;
                             silenceEndsAt = SystemClock.elapsedRealtime() + silenceMs();
+                            scheduleResumeAlarm(silenceMs());
                             talkedMs = 0;
                             lastPos = -1;
                             updateNotification();
@@ -119,7 +123,41 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         }
     };
 
+    /**
+     * Wake the phone when the silence ends, even with the screen off / deep sleep.
+     * Uses the alarm-clock API (same as alarm apps), which Android always delivers on time.
+     */
+    private PendingIntent resumeIntent() {
+        Intent i = new Intent(this, PlayerService.class).setAction(ACTION_RESUME);
+        return PendingIntent.getForegroundService(this, 9, i,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+
+    private void scheduleResumeAlarm(long inMs) {
+        try {
+            AlarmManager alarms = (AlarmManager) getSystemService(ALARM_SERVICE);
+            long at = System.currentTimeMillis() + inMs;
+            boolean exactOk = Build.VERSION.SDK_INT < 31 || alarms.canScheduleExactAlarms();
+            if (exactOk) {
+                PendingIntent show = PendingIntent.getActivity(this, 8,
+                        new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+                alarms.setAlarmClock(new AlarmManager.AlarmClockInfo(at, show), resumeIntent());
+            } else {
+                alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, resumeIntent());
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void cancelResumeAlarm() {
+        try {
+            ((AlarmManager) getSystemService(ALARM_SERVICE)).cancel(resumeIntent());
+        } catch (Exception ignored) {
+        }
+    }
+
     private void endSilenceAndPlay() {
+        cancelResumeAlarm();
         inSilence = false;
         talkedMs = 0;
         lastPos = -1;
@@ -233,6 +271,17 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
                 break;
             case ACTION_PREV:
                 prev();
+                break;
+            case ACTION_RESUME:
+                if (inSilence) {
+                    endSilenceAndPlay();
+                } else if (mp == null || !prepared) {
+                    // the app was closed by the phone during the silence: continue where we stopped
+                    int idx = Library.prefs(this).getInt(Library.KEY_INDEX, 0);
+                    long pos = Library.prefs(this).getLong(Library.KEY_POS, 0);
+                    if (idx >= Library.uris.size()) idx = 0;
+                    playIndex(idx, pos);
+                }
                 break;
             case ACTION_STOP:
                 stopAll();
