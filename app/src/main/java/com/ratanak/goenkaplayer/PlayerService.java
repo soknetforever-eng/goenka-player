@@ -53,8 +53,8 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     private PowerManager.WakeLock wakeLock;
 
     // ---- 10-10 mode: the app itself pauses for 10 min after every 10 min of talk ----
-    public static final long TALK_MS = 10 * 60 * 1000L;
-    public static final long SILENCE_MS = 10 * 60 * 1000L;
+    public long talkMs() { return Library.talkMinutes(this) * 60 * 1000L; }
+    public long silenceMs() { return Library.silenceMinutes(this) * 60 * 1000L; }
     private long talkedMs;          // talk played since the last silence
     private long lastPos = -1;
     private boolean inSilence;
@@ -70,7 +70,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         return inSilence ? Math.max(0, silenceEndsAt - SystemClock.elapsedRealtime()) : 0;
     }
 
-    public long talkRemaining() { return Math.max(0, TALK_MS - talkedMs); }
+    public long talkRemaining() { return Math.max(0, talkMs() - talkedMs); }
 
     private void resetCycle() {
         talkedMs = 0;
@@ -90,12 +90,12 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
                             if (d > 0 && d < 5000) talkedMs += d;
                         }
                         lastPos = pos;
-                        if (talkedMs >= TALK_MS) {
+                        if (talkedMs >= talkMs()) {
                             // start the silent period: pause the lesson, the app keeps time
                             mp.pause();
                             savePosition();
                             inSilence = true;
-                            silenceEndsAt = SystemClock.elapsedRealtime() + SILENCE_MS;
+                            silenceEndsAt = SystemClock.elapsedRealtime() + silenceMs();
                             talkedMs = 0;
                             lastPos = -1;
                             updateNotification();
@@ -246,9 +246,14 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     // ---------- playback ----------
 
     public void playIndex(int i, long startMs) {
+        playIndex(i, startMs, false);
+    }
+
+    /** keepCycle = true when moving on automatically, so the talk/silence timer carries over. */
+    public void playIndex(int i, long startMs, boolean keepCycle) {
         if (i < 0 || i >= Library.uris.size()) return;
         releasePlayer();
-        resetCycle();
+        if (keepCycle) lastPos = -1; else resetCycle();
         index = i;
         prepared = false;
         Library.prefs(this).edit().putInt(Library.KEY_INDEX, i).putLong(Library.KEY_POS, startMs).apply();
@@ -267,7 +272,9 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         });
         mp.setOnCompletionListener(p -> {
             if (index + 1 < Library.uris.size()) {
-                playIndex(index + 1, 0);
+                playIndex(index + 1, 0, true);
+            } else if (Library.loop(this) && !Library.uris.isEmpty()) {
+                playIndex(0, 0, true);   // loop back to the first file
             } else {
                 Library.prefs(this).edit().putLong(Library.KEY_POS, 0).apply();
                 updateNotification();
@@ -433,7 +440,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         Notification.Builder b = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle(title)
-                .setContentText(inSilence ? "ស្ងាត់ ១០ នាទី (ចុច ▶ ដើម្បីរំលង)" : (playing ? "កំពុងលេង" : "ផ្អាក"))
+                .setContentText(inSilence ? "ស្ងាត់ " + Library.silenceMinutes(this) + " នាទី (ចុច ▶ ដើម្បីរំលង)" : (playing ? "កំពុងលេង" : "ផ្អាក"))
                 .setContentIntent(content)
                 .setOngoing(true)
                 .setShowWhen(false)

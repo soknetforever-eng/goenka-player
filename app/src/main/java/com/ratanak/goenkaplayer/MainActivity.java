@@ -17,7 +17,11 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.TextWatcher;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.SeekBar;
@@ -30,7 +34,7 @@ public class MainActivity extends Activity {
 
     private TextView title, timeText, hint, cycleStatus;
     private SeekBar seek;
-    private Button playBtn, batteryBtn, cycleBtn;
+    private Button playBtn, batteryBtn, cycleBtn, loopBtn;
     private ListView list;
     private ArrayAdapter<String> adapter;
     private boolean userSeeking;
@@ -96,6 +100,26 @@ public class MainActivity extends Activity {
             updateCycleButton();
         });
         root.addView(cycleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // minutes row:  និយាយ [10] នាទី   ស្ងាត់ [10] នាទី
+        LinearLayout mins = new LinearLayout(this);
+        mins.setOrientation(LinearLayout.HORIZONTAL);
+        mins.setGravity(Gravity.CENTER_VERTICAL);
+        mins.addView(label("និយាយ"));
+        mins.addView(minuteBox(Library.KEY_TALK_MIN, Library.talkMinutes(this)));
+        mins.addView(label("នាទី    ស្ងាត់"));
+        mins.addView(minuteBox(Library.KEY_SIL_MIN, Library.silenceMinutes(this)));
+        mins.addView(label("នាទី"));
+        root.addView(mins, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        loopBtn = button("");
+        loopBtn.setTextSize(15);
+        loopBtn.setOnClickListener(v -> {
+            boolean on = !Library.loop(this);
+            Library.prefs(this).edit().putBoolean(Library.KEY_LOOP, on).apply();
+            updateCycleButton();
+        });
+        root.addView(loopBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         updateCycleButton();
 
         title = new TextView(this);
@@ -165,14 +189,56 @@ public class MainActivity extends Activity {
         });
         root.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        // keep the keyboard closed when the app opens
+        root.setFocusableInTouchMode(true);
+        root.requestFocus();
         setContentView(root);
+    }
+
+    private TextView label(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(16);
+        t.setPadding(dp(4), 0, dp(4), 0);
+        return t;
+    }
+
+    /** Small number box that saves its value (minutes) as soon as it changes. */
+    private EditText minuteBox(String key, int value) {
+        EditText e = new EditText(this);
+        e.setInputType(InputType.TYPE_CLASS_NUMBER);
+        e.setText(String.valueOf(value));
+        e.setTextSize(18);
+        e.setGravity(Gravity.CENTER);
+        e.setMinEms(2);
+        e.setSelectAllOnFocus(true);
+        e.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(Editable s) {
+                try {
+                    int m = Integer.parseInt(s.toString().trim());
+                    if (m >= 1 && m <= 600) {
+                        Library.prefs(MainActivity.this).edit().putInt(key, m).apply();
+                        updateCycleButton();
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+        });
+        return e;
     }
 
     private void updateCycleButton() {
         boolean on = Library.prefs(this).getBoolean(Library.KEY_CYCLE, true);
+        int t = Library.talkMinutes(this), s = Library.silenceMinutes(this);
         cycleBtn.setText(on
-                ? "របៀប ១០-១០: បើក  (និយាយ ១០ នាទី → ស្ងាត់ ១០ នាទី)"
-                : "របៀប ១០-១០: បិទ  (លេងជាប់ធម្មតា)");
+                ? "ចាក់/ស្ងាត់: បើក  (ចាក់ " + t + " នាទី → ស្ងាត់ " + s + " នាទី)"
+                : "ចាក់/ស្ងាត់: បិទ  (លេងជាប់ធម្មតា)");
+        if (loopBtn != null) {
+            loopBtn.setText(Library.loop(this)
+                    ? "🔁 Loop: បើក  (ចប់ File ចុងក្រោយ → ចាប់ផ្ដើម File ទី១ ម្ដងទៀត)"
+                    : "🔁 Loop: បិទ  (ឈប់ពេលចប់ File ចុងក្រោយ)");
+        }
     }
 
     private void send(String action) {

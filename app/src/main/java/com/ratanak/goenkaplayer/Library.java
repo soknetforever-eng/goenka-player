@@ -18,6 +18,13 @@ public final class Library {
     public static final String KEY_INDEX = "last_index";
     public static final String KEY_POS = "last_pos";
     public static final String KEY_CYCLE = "cycle_10_10";
+    public static final String KEY_TALK_MIN = "talk_minutes";
+    public static final String KEY_SIL_MIN = "silence_minutes";
+    public static final String KEY_LOOP = "loop_folder";
+
+    public static int talkMinutes(Context c) { return Math.max(1, prefs(c).getInt(KEY_TALK_MIN, 10)); }
+    public static int silenceMinutes(Context c) { return Math.max(1, prefs(c).getInt(KEY_SIL_MIN, 10)); }
+    public static boolean loop(Context c) { return prefs(c).getBoolean(KEY_LOOP, true); }
 
     public static final List<Uri> uris = new ArrayList<>();
     public static final List<String> names = new ArrayList<>();
