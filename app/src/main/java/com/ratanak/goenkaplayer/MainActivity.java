@@ -28,9 +28,9 @@ public class MainActivity extends Activity {
 
     private static final int REQ_FOLDER = 10;
 
-    private TextView title, timeText, hint;
+    private TextView title, timeText, hint, cycleStatus;
     private SeekBar seek;
-    private Button playBtn, batteryBtn;
+    private Button playBtn, batteryBtn, cycleBtn;
     private ListView list;
     private ArrayAdapter<String> adapter;
     private boolean userSeeking;
@@ -88,6 +88,16 @@ public class MainActivity extends Activity {
         batteryBtn.setOnClickListener(v -> askBatteryExemption());
         root.addView(batteryBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        cycleBtn = button("");
+        cycleBtn.setTextSize(15);
+        cycleBtn.setOnClickListener(v -> {
+            boolean on = !Library.prefs(this).getBoolean(Library.KEY_CYCLE, true);
+            Library.prefs(this).edit().putBoolean(Library.KEY_CYCLE, on).apply();
+            updateCycleButton();
+        });
+        root.addView(cycleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        updateCycleButton();
+
         title = new TextView(this);
         title.setTextSize(17);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -114,6 +124,13 @@ public class MainActivity extends Activity {
         timeText.setTextSize(16);
         timeText.setText("0:00:00 / 0:00:00");
         root.addView(timeText);
+
+        cycleStatus = new TextView(this);
+        cycleStatus.setGravity(Gravity.CENTER);
+        cycleStatus.setTextSize(16);
+        cycleStatus.setTypeface(Typeface.DEFAULT_BOLD);
+        cycleStatus.setPadding(0, dp(6), 0, dp(6));
+        root.addView(cycleStatus);
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -149,6 +166,13 @@ public class MainActivity extends Activity {
         root.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         setContentView(root);
+    }
+
+    private void updateCycleButton() {
+        boolean on = Library.prefs(this).getBoolean(Library.KEY_CYCLE, true);
+        cycleBtn.setText(on
+                ? "របៀប ១០-១០: បើក  (និយាយ ១០ នាទី → ស្ងាត់ ១០ នាទី)"
+                : "របៀប ១០-១០: បិទ  (លេងជាប់ធម្មតា)");
     }
 
     private void send(String action) {
@@ -210,7 +234,17 @@ public class MainActivity extends Activity {
         PlayerService ps = PlayerService.instance;
         if (ps == null) {
             playBtn.setText("▶");
+            cycleStatus.setText("");
             return;
+        }
+        if (ps.isInSilence()) {
+            cycleStatus.setTextColor(Color.rgb(0x8D, 0x5A, 0x2B));
+            cycleStatus.setText("🔇 ស្ងាត់ — នៅសល់ " + Library.time(ps.silenceRemaining()) + "  (ចុច ▶ ដើម្បីរំលង)");
+        } else if (ps.cycleEnabled() && ps.isPlaying()) {
+            cycleStatus.setTextColor(Color.DKGRAY);
+            cycleStatus.setText("🔊 និយាយ — ស្ងាត់ក្នុងរយៈ " + Library.time(ps.talkRemaining()));
+        } else {
+            cycleStatus.setText("");
         }
         int i = ps.index();
         if (i >= 0 && i < Library.names.size()) {

@@ -19,6 +19,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 /**
  * Background player. Runs as a foreground service with a partial wake lock, so playback
@@ -49,15 +50,98 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
 
     private int tick;
     private KeepAlive keepAlive;
+    private PowerManager.WakeLock wakeLock;
 
-    /** Every second: keep the quiet "keep-alive" sound in step with playback; save position every 5 s. */
+    // ---- 10-10 mode: the app itself pauses for 10 min after every 10 min of talk ----
+    public static final long TALK_MS = 10 * 60 * 1000L;
+    public static final long SILENCE_MS = 10 * 60 * 1000L;
+    private long talkedMs;          // talk played since the last silence
+    private long lastPos = -1;
+    private boolean inSilence;
+    private long silenceEndsAt;     // SystemClock.elapsedRealtime()
+
+    public boolean cycleEnabled() {
+        return Library.prefs(this).getBoolean(Library.KEY_CYCLE, true);
+    }
+
+    public boolean isInSilence() { return inSilence; }
+
+    public long silenceRemaining() {
+        return inSilence ? Math.max(0, silenceEndsAt - SystemClock.elapsedRealtime()) : 0;
+    }
+
+    public long talkRemaining() { return Math.max(0, TALK_MS - talkedMs); }
+
+    private void resetCycle() {
+        talkedMs = 0;
+        lastPos = -1;
+        inSilence = false;
+    }
+
+    /** Every second: run the 10-10 timer, keep the CPU awake while needed, save position every 5 s. */
     private final Runnable saver = new Runnable() {
         @Override public void run() {
-            if (isPlaying()) startKeepAlive(); else stopKeepAlive();
-            if (++tick % 5 == 0) savePosition();
+            try {
+                if (cycleEnabled()) {
+                    if (!inSilence && isPlaying()) {
+                        long pos = position();
+                        if (lastPos >= 0) {
+                            long d = pos - lastPos;
+                            if (d > 0 && d < 5000) talkedMs += d;
+                        }
+                        lastPos = pos;
+                        if (talkedMs >= TALK_MS) {
+                            // start the silent period: pause the lesson, the app keeps time
+                            mp.pause();
+                            savePosition();
+                            inSilence = true;
+                            silenceEndsAt = SystemClock.elapsedRealtime() + SILENCE_MS;
+                            talkedMs = 0;
+                            lastPos = -1;
+                            updateNotification();
+                        }
+                    } else if (inSilence && SystemClock.elapsedRealtime() >= silenceEndsAt) {
+                        endSilenceAndPlay();
+                    } else if (!isPlaying()) {
+                        lastPos = -1;
+                    }
+                } else {
+                    inSilence = false;
+                }
+
+                boolean active = isPlaying() || inSilence;
+                if (active) holdWake(); else releaseWake();
+                if (inSilence) startKeepAlive(); else stopKeepAlive();
+                if (++tick % 5 == 0) savePosition();
+            } catch (Exception ignored) {
+            }
             handler.postDelayed(this, 1000);
         }
     };
+
+    private void endSilenceAndPlay() {
+        inSilence = false;
+        talkedMs = 0;
+        lastPos = -1;
+        stopKeepAlive();
+        if (mp != null && prepared && requestFocus()) {
+            try { mp.start(); } catch (Exception ignored) {}
+        }
+        updateNotification();
+    }
+
+    private void holdWake() {
+        if (wakeLock == null) {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GoenkaPlayer:cycle");
+            wakeLock.setReferenceCounted(false);
+        }
+        if (!wakeLock.isHeld()) wakeLock.acquire(3 * 60 * 60 * 1000L);
+    }
+
+    private void releaseWake() {
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+    }
 
     /**
      * Plays an extremely quiet hiss (about -70 dB, not audible) while a lesson is playing.
@@ -164,6 +248,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     public void playIndex(int i, long startMs) {
         if (i < 0 || i >= Library.uris.size()) return;
         releasePlayer();
+        resetCycle();
         index = i;
         prepared = false;
         Library.prefs(this).edit().putInt(Library.KEY_INDEX, i).putLong(Library.KEY_POS, startMs).apply();
@@ -177,7 +262,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         mp.setOnPreparedListener(p -> {
             prepared = true;
             if (seek > 0 && seek < p.getDuration()) p.seekTo((int) seek);
-            if (requestFocus()) { p.start(); startKeepAlive(); }
+            if (requestFocus()) p.start();
             updateNotification();
         });
         mp.setOnCompletionListener(p -> {
@@ -203,6 +288,11 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     }
 
     public void toggle() {
+        if (inSilence) {
+            // Play pressed during the silent period: skip the rest of the silence.
+            endSilenceAndPlay();
+            return;
+        }
         if (mp == null || !prepared) {
             // Nothing loaded yet: resume where we stopped last time.
             int i = Library.prefs(this).getInt(Library.KEY_INDEX, 0);
@@ -270,6 +360,8 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     }
 
     private void stopAll() {
+        resetCycle();
+        releaseWake();
         stopKeepAlive();
         savePosition();
         releasePlayer();
@@ -341,7 +433,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         Notification.Builder b = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle(title)
-                .setContentText(playing ? "កំពុងលេង" : "ផ្អាក")
+                .setContentText(inSilence ? "ស្ងាត់ ១០ នាទី (ចុច ▶ ដើម្បីរំលង)" : (playing ? "កំពុងលេង" : "ផ្អាក"))
                 .setContentIntent(content)
                 .setOngoing(true)
                 .setShowWhen(false)
@@ -376,6 +468,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     @Override
     public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        releaseWake();
         stopKeepAlive();
         savePosition();
         releasePlayer();
