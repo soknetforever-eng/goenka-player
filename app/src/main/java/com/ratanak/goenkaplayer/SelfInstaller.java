@@ -64,7 +64,7 @@ public final class SelfInstaller {
         }
     }
 
-    static void notify(Context c, String title, String text, PendingIntent tap) {
+    static void post(Context c, String title, String text, PendingIntent tap) {
         NotificationManager nm = c.getSystemService(NotificationManager.class);
         NotificationChannel ch = new NotificationChannel(CHANNEL, "Updates", NotificationManager.IMPORTANCE_DEFAULT);
         ch.setSound(null, null);
@@ -92,7 +92,7 @@ public final class SelfInstaller {
                 }
                 PendingIntent tap = PendingIntent.getActivity(c, 41, confirm,
                         PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-                notify(c, "Goenka Player កំណែថ្មី", "ចុចទីនេះដើម្បីដំឡើង (តែម្ដងនេះ)", tap);
+                post(c, "Goenka Player កំណែថ្មី", "ចុចទីនេះដើម្បីដំឡើង (តែម្ដងនេះ)", tap);
             } else if (status != PackageInstaller.STATUS_SUCCESS) {
                 String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
                 Library.prefs(c).edit()
@@ -100,7 +100,7 @@ public final class SelfInstaller {
                         .apply();
                 PendingIntent open = PendingIntent.getActivity(c, 42, new Intent(c, MainActivity.class),
                         PendingIntent.FLAG_IMMUTABLE);
-                notify(c, "Goenka Player", "ដំឡើងកំណែថ្មីមិនបាន — បើក App ដើម្បីសាកម្ដងទៀត", open);
+                post(c, "Goenka Player", "ដំឡើងកំណែថ្មីមិនបាន — បើក App ដើម្បីសាកម្ដងទៀត", open);
             }
             // STATUS_SUCCESS: Android restarts the app; UpdateReceiver shows "updated".
         }
