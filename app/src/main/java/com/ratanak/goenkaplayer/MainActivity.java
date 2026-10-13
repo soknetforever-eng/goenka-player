@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
     private SeekBar seek;
     private Button playBtn;
     private View batteryBanner, settingsPanel, driveRow;
+    private Button gearBtn;
     private Switch cycleSwitch, loopSwitch;
     private ListView list;
     private PlaylistAdapter adapter;
@@ -79,7 +80,7 @@ public class MainActivity extends Activity {
         Updater.schedule(this);
         boolean loaded = Library.ensureLoaded(this);
         showList();
-        settingsPanel.setVisibility(loaded ? View.GONE : View.VISIBLE);
+        showSettings(!loaded);
     }
 
     @Override
@@ -188,8 +189,8 @@ public class MainActivity extends Activity {
         header.addView(appName, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         Button gear = pillButton("⚙️  ការកំណត់", BROWN_DARK, Color.WHITE);
         gear.setTextSize(14);
-        gear.setOnClickListener(v -> settingsPanel.setVisibility(
-                settingsPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        gearBtn = gear;
+        gear.setOnClickListener(v -> showSettings(settingsPanel.getVisibility() != View.VISIBLE));
         header.addView(gear);
         root.addView(header);
 
@@ -260,7 +261,6 @@ public class MainActivity extends Activity {
 
         // ---- settings (collapsible) ----
         LinearLayout set = card();
-        settingsPanel = set;
 
         set.addView(text("ប្រភព MP3", 15, BROWN, true));
         LinearLayout srcRow = row();
@@ -394,7 +394,16 @@ public class MainActivity extends Activity {
         updateInfo = text("", 13, MUTED, false);
         updateInfo.setPadding(0, dp(6), 0, 0);
         set.addView(updateInfo);
-        root.addView(set, cardParams());
+        // settings scroll inside the free space (so nothing is cut off on small screens)
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        scroll.setFillViewport(true);
+        LinearLayout pad = new LinearLayout(this);
+        pad.setOrientation(LinearLayout.VERTICAL);
+        pad.setPadding(0, 0, 0, dp(16));
+        pad.addView(set, cardParams());
+        scroll.addView(pad);
+        settingsPanel = scroll;
+        root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         // ---- playlist ----
         listHeader = text("បញ្ជីវគ្គ", 15, BROWN, true);
@@ -470,6 +479,15 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("បោះបង់", null)
                 .show();
+    }
+
+    /** Settings and the lesson list share the lower part of the screen. */
+    private void showSettings(boolean show) {
+        settingsPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+        list.setVisibility(show ? View.GONE : View.VISIBLE);
+        listHeader.setVisibility(show ? View.GONE : View.VISIBLE);
+        gearBtn.setText(show ? "✖  បិទ" : "⚙️  ការកំណត់");
+        if (show) updateSettingsText();
     }
 
     private void updateSettingsText() {
@@ -583,7 +601,7 @@ public class MainActivity extends Activity {
                     .apply();
             if (Library.load(this, tree)) {
                 showList();
-                settingsPanel.setVisibility(View.GONE);
+                showSettings(false);
                 Toast.makeText(this, Library.names.size() + " File", Toast.LENGTH_SHORT).show();
             }
         }
@@ -627,7 +645,7 @@ public class MainActivity extends Activity {
                     Library.saveDrive(this, link.trim(), l);
                     Library.loadDrive(this);
                     showList();
-                    settingsPanel.setVisibility(View.GONE);
+                    showSettings(false);
                     Toast.makeText(this, l.ids.size() + " File ពី Google Drive", Toast.LENGTH_SHORT).show();
                 });
             } catch (Exception ex) {
@@ -661,7 +679,7 @@ public class MainActivity extends Activity {
     private void send(String action) {
         if (Library.uris.isEmpty()) {
             Toast.makeText(this, "សូមជ្រើស MP3 នៅក្នុង ⚙️ ការកំណត់", Toast.LENGTH_SHORT).show();
-            settingsPanel.setVisibility(View.VISIBLE);
+            showSettings(true);
             return;
         }
         startForegroundService(new Intent(this, PlayerService.class).setAction(action));
