@@ -191,6 +191,13 @@ public class MainActivity extends Activity {
         header.setPadding(dp(16), dp(12), dp(10), dp(12));
         TextView appName = text("🪷  Goenka Player", 20, Color.WHITE, true);
         header.addView(appName, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button ext = pillButton("⏱ App ផ្សេង", BROWN_DARK, Color.WHITE);
+        ext.setTextSize(13);
+        ext.setOnClickListener(v -> openExternalTimer());
+        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        elp.rightMargin = dp(6);
+        header.addView(ext, elp);
         Button gear = pillButton("⚙️  ការកំណត់", BROWN_DARK, Color.WHITE);
         gear.setTextSize(14);
         gearBtn = gear;
@@ -692,6 +699,60 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ------------------------------------------------------------------ timer for other apps
+
+    private void openExternalTimer() {
+        if (!ExternalTimerService.hasAccess(this)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("⏱ Timer សម្រាប់ App ផ្សេង")
+                    .setMessage("Timer នេះនឹង Pause/Play App ផ្សេង (YouTube, Spotify, Podcast…) តាមនាទីចាក់/ស្ងាត់ ទោះបិទអេក្រង់ក៏ដោយ។\n\n"
+                            + "ត្រូវអនុញ្ញាតម្ដង: ចុច \"បើក Settings\" → ជ្រើស Goenka Player → បើក (Allow)។")
+                    .setPositiveButton("បើក Settings", (d, w) -> {
+                        try { startActivity(ExternalTimerService.accessSettings()); }
+                        catch (Exception e) { Toast.makeText(this, "បើក Settings មិនបាន", Toast.LENGTH_SHORT).show(); }
+                    })
+                    .setNegativeButton("បោះបង់", null)
+                    .show();
+            return;
+        }
+        String mins = "ចាក់ " + Library.talkMinutes(this) + " នាទី • ស្ងាត់ " + Library.silenceMinutes(this) + " នាទី";
+        ExternalTimerService ex = ExternalTimerService.instance;
+        if (ex != null) {
+            new AlertDialog.Builder(this)
+                    .setTitle("⏱ Timer: " + ex.label())
+                    .setMessage(ex.statusText() + "\n" + mins)
+                    .setPositiveButton("⏹ បញ្ឈប់ Timer", (d, w) -> startService(
+                            new Intent(this, ExternalTimerService.class).setAction(ExternalTimerService.ACTION_STOP)))
+                    .setNegativeButton("បិទ", null)
+                    .show();
+            return;
+        }
+        android.media.session.MediaController mc = ExternalTimerService.findController(this, null);
+        if (mc == null) {
+            new AlertDialog.Builder(this)
+                    .setTitle("⏱ Timer សម្រាប់ App ផ្សេង")
+                    .setMessage("រកមិនឃើញ App ណាកំពុងចាក់ទេ។\n\nសូមបើកវីដេអូ/សម្លេងក្នុង YouTube, Spotify ឬ Podcast សិន រួចត្រឡប់មកចុចម្ដងទៀត។")
+                    .setPositiveButton("យល់ព្រម", null)
+                    .show();
+            return;
+        }
+        String app = ExternalTimerService.appName(this, mc.getPackageName());
+        String t = ExternalTimerService.mediaTitle(mc);
+        String state = ExternalTimerService.isPlaying(mc) ? "កំពុងចាក់" : "ផ្អាក";
+        new AlertDialog.Builder(this)
+                .setTitle("⏱ " + app + " — " + state)
+                .setMessage((t.isEmpty() ? "" : "🎵 " + t + "\n\n") + mins
+                        + "\n\n(ប្ដូរនាទីបាននៅ ⚙️ ការកំណត់)\nក្រោយចុចចាប់ផ្ដើម អាចបិទអេក្រង់បាន។")
+                .setPositiveButton("▶ ចាប់ផ្ដើម", (d, w) -> {
+                    stopPlayer();
+                    Intent i = new Intent(this, ExternalTimerService.class).setAction(ExternalTimerService.ACTION_START);
+                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+                    Toast.makeText(this, "⏱ Timer ចាប់ផ្ដើមសម្រាប់ " + app, Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("បោះបង់", null)
+                .show();
+    }
+
     private void stopPlayer() {
         if (PlayerService.instance != null) {
             startService(new Intent(this, PlayerService.class).setAction(PlayerService.ACTION_STOP));
@@ -893,6 +954,14 @@ public class MainActivity extends Activity {
         if (PlayerService.instance == null && uiTick % 6 == 0) adapter.notifyDataSetChanged();
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         batteryBanner.setVisibility(pm.isIgnoringBatteryOptimizations(getPackageName()) ? View.GONE : View.VISIBLE);
+
+        ExternalTimerService ex = ExternalTimerService.instance;
+        if (ex != null && PlayerService.instance == null) {
+            title.setText("⏱ Timer: " + ex.label());
+            statusPill.setText(ex.statusText());
+            playBtn.setText("▶");
+            return;
+        }
 
         PlayerService ps = PlayerService.instance;
         if (ps == null) {
