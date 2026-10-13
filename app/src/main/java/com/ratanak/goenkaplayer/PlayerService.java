@@ -15,6 +15,7 @@ import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -113,7 +114,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
                     inSilence = false;
                 }
 
-                boolean active = isPlaying() || inSilence;
+                boolean active = isPlaying() || inSilence || downloading;
                 if (active) holdWake(); else releaseWake();
                 if (inSilence) startKeepAlive(); else stopKeepAlive();
                 if (++tick % 5 == 0) savePosition();
@@ -305,7 +306,72 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         if (keepCycle) lastPos = -1; else resetCycle();
         index = i;
         prepared = false;
+        downloadToken++;
+        downloading = false;
+        lastError = null;
         Library.prefs(this).edit().putInt(Library.KEY_INDEX, i).putLong(Library.KEY_POS, startMs).apply();
+        Uri u = Library.uris.get(i);
+        if (Library.isDrive(u) && !Drive.isSaved(this, Library.driveId(u))) {
+            beginDownload(i, startMs);   // Google Drive file not saved yet: download first
+            updateNotification();
+            return;
+        }
+        prepareCurrent(i, startMs);
+    }
+
+    // ---------- Google Drive downloads ----------
+    private volatile boolean downloading;
+    private volatile int downloadPct;
+    private int downloadToken;
+    private volatile String lastError;
+
+    public boolean isDownloading() { return downloading; }
+    public int downloadPercent() { return downloadPct; }
+    public String lastError() { return lastError; }
+
+    private void beginDownload(int i, long startMs) {
+        final int token = downloadToken;
+        final String id = Library.driveId(Library.uris.get(i));
+        downloading = true;
+        downloadPct = 0;
+        new Thread(() -> {
+            try {
+                Drive.download(this, id, pct -> downloadPct = pct);
+                handler.post(() -> {
+                    if (token == downloadToken && index == i) {
+                        downloading = false;
+                        prepareCurrent(i, startMs);
+                    }
+                });
+            } catch (Exception e) {
+                handler.post(() -> {
+                    if (token == downloadToken) {
+                        downloading = false;
+                        lastError = "not-shared".equals(e.getMessage())
+                                ? "File នេះមិនទាន់ Share (Anyone with the link)"
+                                : "ទាញយកមិនបាន — សូមពិនិត្យ Internet";
+                        updateNotification();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** Quietly saves the next Drive file while the current one plays. */
+    private void prefetchNext(int i) {
+        int n = Library.uris.size();
+        if (n == 0) return;
+        int next = (i + 1 < n) ? i + 1 : (Library.loop(this) ? 0 : -1);
+        if (next < 0 || next == i) return;
+        Uri u = Library.uris.get(next);
+        if (!Library.isDrive(u) || Drive.isSaved(this, Library.driveId(u))) return;
+        final String id = Library.driveId(u);
+        new Thread(() -> {
+            try { Drive.download(this, id, null); } catch (Exception ignored) {}
+        }).start();
+    }
+
+    private void prepareCurrent(int i, long startMs) {
         mp = new MediaPlayer();
         mp.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -318,6 +384,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
             if (seek > 0 && seek < p.getDuration()) p.seekTo((int) seek);
             if (requestFocus()) p.start();
             updateNotification();
+            prefetchNext(index);
         });
         mp.setOnCompletionListener(p -> {
             if (index + 1 < Library.uris.size()) {
@@ -335,15 +402,19 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
             return true;
         });
         try {
-            mp.setDataSource(this, Library.uris.get(i));
+            Uri src = Library.uris.get(i);
+            if (Library.isDrive(src)) mp.setDataSource(Drive.localFile(this, Library.driveId(src)).getPath());
+            else mp.setDataSource(this, src);
             mp.prepareAsync();
         } catch (Exception e) {
             releasePlayer();
+            lastError = "បើក File មិនបាន";
         }
         updateNotification();
     }
 
     public void toggle() {
+        if (downloading) return;   // still fetching from Google Drive
         if (inSilence) {
             // Play pressed during the silent period: skip the rest of the silence.
             endSilenceAndPlay();
@@ -489,7 +560,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         Notification.Builder b = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle(title)
-                .setContentText(inSilence ? "ស្ងាត់ " + Library.silenceMinutes(this) + " នាទី (ចុច ▶ ដើម្បីរំលង)" : (playing ? "កំពុងលេង" : "ផ្អាក"))
+                .setContentText(downloading ? "កំពុងទាញយកពី Google Drive… " + downloadPct + "%" : inSilence ? "ស្ងាត់ " + Library.silenceMinutes(this) + " នាទី (ចុច ▶ ដើម្បីរំលង)" : (playing ? "កំពុងលេង" : "ផ្អាក"))
                 .setContentIntent(content)
                 .setOngoing(true)
                 .setShowWhen(false)

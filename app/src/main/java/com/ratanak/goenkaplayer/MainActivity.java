@@ -2,29 +2,32 @@ package com.ratanak.goenkaplayer;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.provider.DocumentsContract;
 import android.provider.Settings;
+import android.text.InputType;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
-import android.text.Editable;
-import android.text.InputType;
-import android.text.TextWatcher;
+import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -32,11 +35,22 @@ public class MainActivity extends Activity {
 
     private static final int REQ_FOLDER = 10;
 
-    private TextView title, timeText, hint, cycleStatus;
+    // colours
+    private static final int BROWN = Color.rgb(0x7A, 0x4A, 0x1F);
+    private static final int BROWN_DARK = Color.rgb(0x5C, 0x36, 0x14);
+    private static final int CREAM = Color.rgb(0xFB, 0xF6, 0xEE);
+    private static final int CARD = Color.WHITE;
+    private static final int TEXT = Color.rgb(0x2B, 0x22, 0x1A);
+    private static final int MUTED = Color.rgb(0x8A, 0x7D, 0x70);
+    private static final int HILITE = Color.rgb(0xFC, 0xEB, 0xCF);
+
+    private TextView title, statusPill, posText, durText, sourceLabel, listHeader, driveInfo, talkVal, silVal;
     private SeekBar seek;
-    private Button playBtn, batteryBtn, cycleBtn, loopBtn;
+    private Button playBtn;
+    private View batteryBanner, settingsPanel, driveRow;
+    private Switch cycleSwitch, loopSwitch;
     private ListView list;
-    private ArrayAdapter<String> adapter;
+    private PlaylistAdapter adapter;
     private boolean userSeeking;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -47,9 +61,12 @@ public class MainActivity extends Activity {
         }
     };
 
+    // ------------------------------------------------------------------ lifecycle
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getWindow().setStatusBarColor(BROWN_DARK);
         buildUi();
 
         if (Build.VERSION.SDK_INT >= 33
@@ -57,82 +74,149 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         }
 
-        if (Library.ensureLoaded(this)) {
-            showList();
-        }
+        boolean loaded = Library.ensureLoaded(this);
+        showList();
+        settingsPanel.setVisibility(loaded ? View.GONE : View.VISIBLE);
     }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        handler.post(ticker);
+    }
+
+    @Override
+    protected void onPause() {
+        handler.removeCallbacks(ticker);
+        super.onPause();
+    }
+
+    // ------------------------------------------------------------------ helpers
 
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
-    private Button button(String text) {
+    private GradientDrawable round(int color, int radiusDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(radiusDp));
+        return g;
+    }
+
+    private GradientDrawable circle(int color) {
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(color);
+        return g;
+    }
+
+    private TextView text(String s, int sizeSp, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(sizeSp);
+        t.setTextColor(color);
+        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        return t;
+    }
+
+    private Button pillButton(String label, int bg, int fg) {
         Button b = new Button(this);
-        b.setText(text);
+        b.setText(label);
         b.setAllCaps(false);
-        b.setTextSize(18);
+        b.setTextSize(15);
+        b.setTextColor(fg);
+        b.setBackground(round(bg, 22));
+        b.setPadding(dp(14), 0, dp(14), 0);
+        b.setMinHeight(dp(44));
+        b.setStateListAnimator(null);
         return b;
     }
+
+    private Button roundButton(String label, int sizeDp, int bg, int fg, int textSp) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextSize(textSp);
+        b.setTextColor(fg);
+        b.setBackground(circle(bg));
+        b.setStateListAnimator(null);
+        b.setPadding(0, 0, 0, 0);
+        b.setMinWidth(0);
+        b.setMinHeight(0);
+        b.setLayoutParams(new LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp)));
+        return b;
+    }
+
+    private LinearLayout card() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setBackground(round(CARD, 16));
+        c.setPadding(dp(16), dp(14), dp(16), dp(14));
+        c.setElevation(dp(2));
+        return c;
+    }
+
+    private LinearLayout.LayoutParams cardParams() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(dp(12), dp(10), dp(12), 0);
+        return lp;
+    }
+
+    private LinearLayout row() {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        return r;
+    }
+
+    // ------------------------------------------------------------------ UI
 
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(12), dp(16), dp(12));
+        root.setBackgroundColor(CREAM);
 
-        Button choose = button("📁  ជ្រើសរើស Folder MP3");
-        choose.setOnClickListener(v -> {
-            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-            startActivityForResult(i, REQ_FOLDER);
-        });
-        root.addView(choose, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // ---- header ----
+        LinearLayout header = row();
+        header.setBackgroundColor(BROWN);
+        header.setPadding(dp(16), dp(12), dp(10), dp(12));
+        TextView appName = text("🪷  Goenka Player", 20, Color.WHITE, true);
+        header.addView(appName, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button gear = pillButton("⚙️  ការកំណត់", BROWN_DARK, Color.WHITE);
+        gear.setTextSize(14);
+        gear.setOnClickListener(v -> settingsPanel.setVisibility(
+                settingsPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        header.addView(gear);
+        root.addView(header);
 
-        batteryBtn = button("មិនឱ្យទូរស័ព្ទបញ្ឈប់ការលេង (Battery)");
-        batteryBtn.setTextSize(14);
-        batteryBtn.setOnClickListener(v -> askBatteryExemption());
-        root.addView(batteryBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // ---- battery warning ----
+        TextView battery = text("⚠️  ចុចទីនេះ ដើម្បីកុំឱ្យទូរស័ព្ទបញ្ឈប់ការលេង (Battery)", 14, TEXT, true);
+        battery.setBackground(round(Color.rgb(0xFF, 0xE0, 0xA8), 12));
+        battery.setPadding(dp(14), dp(10), dp(14), dp(10));
+        battery.setOnClickListener(v -> askBatteryExemption());
+        batteryBanner = battery;
+        root.addView(battery, cardParams());
 
-        cycleBtn = button("");
-        cycleBtn.setTextSize(15);
-        cycleBtn.setOnClickListener(v -> {
-            boolean on = !Library.prefs(this).getBoolean(Library.KEY_CYCLE, true);
-            Library.prefs(this).edit().putBoolean(Library.KEY_CYCLE, on).apply();
-            updateCycleButton();
-        });
-        root.addView(cycleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // ---- now playing ----
+        LinearLayout now = card();
+        title = text("", 18, TEXT, true);
+        title.setMaxLines(2);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        now.addView(title);
 
-        // minutes row:  និយាយ [10] នាទី   ស្ងាត់ [10] នាទី
-        LinearLayout mins = new LinearLayout(this);
-        mins.setOrientation(LinearLayout.HORIZONTAL);
-        mins.setGravity(Gravity.CENTER_VERTICAL);
-        mins.addView(label("និយាយ"));
-        mins.addView(minuteBox(Library.KEY_TALK_MIN, Library.talkMinutes(this)));
-        mins.addView(label("នាទី    ស្ងាត់"));
-        mins.addView(minuteBox(Library.KEY_SIL_MIN, Library.silenceMinutes(this)));
-        mins.addView(label("នាទី"));
-        root.addView(mins, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        loopBtn = button("");
-        loopBtn.setTextSize(15);
-        loopBtn.setOnClickListener(v -> {
-            boolean on = !Library.loop(this);
-            Library.prefs(this).edit().putBoolean(Library.KEY_LOOP, on).apply();
-            updateCycleButton();
-        });
-        root.addView(loopBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        updateCycleButton();
-
-        title = new TextView(this);
-        title.setTextSize(17);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setPadding(0, dp(12), 0, dp(4));
-        title.setText("សូមជ្រើសរើស Folder");
-        root.addView(title);
+        statusPill = text("", 14, BROWN, true);
+        statusPill.setBackground(round(HILITE, 14));
+        statusPill.setPadding(dp(12), dp(5), dp(12), dp(5));
+        LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pl.topMargin = dp(8);
+        now.addView(statusPill, pl);
 
         seek = new SeekBar(this);
         seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
-                if (fromUser) timeText.setText(Library.time(p) + " / " + Library.time(s.getMax()));
+                if (fromUser) posText.setText(Library.time(p));
             }
             @Override public void onStartTrackingTouch(SeekBar s) { userSeeking = true; }
             @Override public void onStopTrackingTouch(SeekBar s) {
@@ -141,45 +225,143 @@ public class MainActivity extends Activity {
                 if (ps != null) ps.seekTo(s.getProgress());
             }
         });
-        root.addView(seek, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36));
+        sl.topMargin = dp(8);
+        now.addView(seek, sl);
 
-        timeText = new TextView(this);
-        timeText.setGravity(Gravity.CENTER);
-        timeText.setTextSize(16);
-        timeText.setText("0:00:00 / 0:00:00");
-        root.addView(timeText);
+        LinearLayout times = row();
+        posText = text("0:00:00", 13, MUTED, false);
+        durText = text("0:00:00", 13, MUTED, false);
+        durText.setGravity(Gravity.END);
+        times.addView(posText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        times.addView(durText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        now.addView(times);
 
-        cycleStatus = new TextView(this);
-        cycleStatus.setGravity(Gravity.CENTER);
-        cycleStatus.setTextSize(16);
-        cycleStatus.setTypeface(Typeface.DEFAULT_BOLD);
-        cycleStatus.setPadding(0, dp(6), 0, dp(6));
-        root.addView(cycleStatus);
-
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER);
-        Button prev = button("⏮");
-        playBtn = button("▶");
-        Button next = button("⏭");
+        // controls
+        LinearLayout controls = row();
+        controls.setGravity(Gravity.CENTER);
+        controls.setPadding(0, dp(10), 0, dp(2));
+        Button prev = roundButton("⏮", 58, HILITE, BROWN, 22);
+        playBtn = roundButton("▶", 82, BROWN, Color.WHITE, 32);
+        Button next = roundButton("⏭", 58, HILITE, BROWN, 22);
         prev.setOnClickListener(v -> send(PlayerService.ACTION_PREV));
         playBtn.setOnClickListener(v -> send(PlayerService.ACTION_TOGGLE));
         next.setOnClickListener(v -> send(PlayerService.ACTION_NEXT));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(64), 1f);
-        row.addView(prev, lp);
-        row.addView(playBtn, new LinearLayout.LayoutParams(0, dp(64), 1.4f));
-        row.addView(next, new LinearLayout.LayoutParams(0, dp(64), 1f));
-        root.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        controls.addView(prev);
+        controls.addView(new View(this), new LinearLayout.LayoutParams(dp(28), 1));
+        controls.addView(playBtn);
+        controls.addView(new View(this), new LinearLayout.LayoutParams(dp(28), 1));
+        controls.addView(next);
+        now.addView(controls);
+        root.addView(now, cardParams());
 
-        hint = new TextView(this);
-        hint.setTextColor(Color.GRAY);
-        hint.setTextSize(13);
-        hint.setPadding(0, dp(8), 0, dp(4));
-        hint.setText("ចុចលើវគ្គណាមួយដើម្បីលេង");
-        root.addView(hint);
+        // ---- settings (collapsible) ----
+        LinearLayout set = card();
+        settingsPanel = set;
+
+        set.addView(text("ប្រភព MP3", 15, BROWN, true));
+        LinearLayout srcRow = row();
+        srcRow.setPadding(0, dp(8), 0, dp(4));
+        Button local = pillButton("📁 ក្នុងទូរស័ព្ទ", HILITE, BROWN);
+        Button drive = pillButton("☁️ Google Drive", HILITE, BROWN);
+        local.setOnClickListener(v -> chooseLocalFolder());
+        drive.setOnClickListener(v -> askDriveLink());
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        half.setMargins(0, 0, dp(6), 0);
+        srcRow.addView(local, half);
+        LinearLayout.LayoutParams half2 = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        half2.setMargins(dp(6), 0, 0, 0);
+        srcRow.addView(drive, half2);
+        set.addView(srcRow);
+        sourceLabel = text("", 13, MUTED, false);
+        set.addView(sourceLabel);
+
+        LinearLayout dr = row();
+        dr.setPadding(0, dp(4), 0, 0);
+        driveInfo = text("", 13, MUTED, false);
+        dr.addView(driveInfo, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button refreshBtn = pillButton("🔄", HILITE, BROWN);
+        refreshBtn.setOnClickListener(v -> {
+            String link = Library.prefs(this).getString(Library.KEY_DRIVE_LINK, null);
+            if (link != null) loadDriveFolder(link);
+        });
+        dr.addView(refreshBtn, new LinearLayout.LayoutParams(dp(52), dp(40)));
+        Button clear = pillButton("🗑", HILITE, BROWN);
+        clear.setOnClickListener(v -> confirmClearDrive());
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(dp(52), dp(40));
+        cl.leftMargin = dp(6);
+        dr.addView(clear, cl);
+        driveRow = dr;
+        set.addView(dr);
+
+        View line = new View(this);
+        line.setBackgroundColor(Color.rgb(0xEE, 0xE4, 0xD6));
+        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        ll.setMargins(0, dp(12), 0, dp(10));
+        set.addView(line, ll);
+
+        cycleSwitch = new Switch(this);
+        cycleSwitch.setText("⏱  ចាក់ ហើយ ស្ងាត់ (Timer)");
+        cycleSwitch.setTextSize(15);
+        cycleSwitch.setTextColor(TEXT);
+        cycleSwitch.setChecked(Library.prefs(this).getBoolean(Library.KEY_CYCLE, true));
+        cycleSwitch.setOnCheckedChangeListener((b, on) -> {
+            Library.prefs(this).edit().putBoolean(Library.KEY_CYCLE, on).apply();
+            updateSettingsText();
+        });
+        set.addView(cycleSwitch);
+
+        talkVal = text("", 20, TEXT, true);
+        silVal = text("", 20, TEXT, true);
+        set.addView(stepper("ចាក់", Library.KEY_TALK_MIN, talkVal));
+        set.addView(stepper("ស្ងាត់", Library.KEY_SIL_MIN, silVal));
+
+        LinearLayout presets = row();
+        presets.setPadding(0, dp(8), 0, dp(4));
+        presets.addView(text("រហ័ស:", 13, MUTED, false));
+        int[][] choices = {{10, 10}, {15, 10}, {20, 15}, {30, 30}};
+        for (int[] p : choices) {
+            Button b = pillButton(p[0] + "/" + p[1], HILITE, BROWN);
+            b.setTextSize(13);
+            b.setOnClickListener(v -> {
+                Library.prefs(this).edit()
+                        .putInt(Library.KEY_TALK_MIN, p[0])
+                        .putInt(Library.KEY_SIL_MIN, p[1])
+                        .apply();
+                cycleSwitch.setChecked(true);
+                updateSettingsText();
+            });
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(0, dp(38), 1f);
+            bl.leftMargin = dp(6);
+            presets.addView(b, bl);
+        }
+        set.addView(presets);
+
+        loopSwitch = new Switch(this);
+        loopSwitch.setText("🔁  Loop — ចប់ File ចុងក្រោយ ចាប់ផ្ដើមម្ដងទៀត");
+        loopSwitch.setTextSize(15);
+        loopSwitch.setTextColor(TEXT);
+        loopSwitch.setChecked(Library.loop(this));
+        loopSwitch.setOnCheckedChangeListener((b, on) ->
+                Library.prefs(this).edit().putBoolean(Library.KEY_LOOP, on).apply());
+        LinearLayout.LayoutParams lsp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lsp.topMargin = dp(8);
+        set.addView(loopSwitch, lsp);
+        root.addView(set, cardParams());
+
+        // ---- playlist ----
+        listHeader = text("បញ្ជីវគ្គ", 15, BROWN, true);
+        listHeader.setPadding(dp(20), dp(12), dp(20), dp(4));
+        root.addView(listHeader);
 
         list = new ListView(this);
-        list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
+        list.setDivider(null);
+        list.setDividerHeight(dp(4));
+        list.setPadding(dp(10), 0, dp(10), dp(10));
+        list.setClipToPadding(false);
+        adapter = new PlaylistAdapter();
+        list.setAdapter(adapter);
         list.setOnItemClickListener((parent, view, position, id) -> {
             Intent i = new Intent(this, PlayerService.class)
                     .setAction(PlayerService.ACTION_PLAY_INDEX)
@@ -189,61 +371,251 @@ public class MainActivity extends Activity {
         });
         root.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // keep the keyboard closed when the app opens
-        root.setFocusableInTouchMode(true);
-        root.requestFocus();
         setContentView(root);
+        updateSettingsText();
     }
 
-    private TextView label(String text) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextSize(16);
-        t.setPadding(dp(4), 0, dp(4), 0);
-        return t;
+    /** "ចាក់   (–)   15 នាទី   (+)" — tap the number to type it. */
+    private View stepper(String label, String key, TextView value) {
+        LinearLayout r = row();
+        r.setPadding(0, dp(8), 0, 0);
+        TextView l = text(label, 16, TEXT, false);
+        r.addView(l, new LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT));
+        Button minus = roundButton("–", 44, HILITE, BROWN, 22);
+        Button plus = roundButton("+", 44, HILITE, BROWN, 22);
+        minus.setOnClickListener(v -> changeMinutes(key, -1));
+        plus.setOnClickListener(v -> changeMinutes(key, +1));
+        minus.setOnLongClickListener(v -> { changeMinutes(key, -5); return true; });
+        plus.setOnLongClickListener(v -> { changeMinutes(key, +5); return true; });
+        value.setGravity(Gravity.CENTER);
+        value.setOnClickListener(v -> typeMinutes(key));
+        r.addView(minus);
+        r.addView(value, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        r.addView(plus);
+        return r;
     }
 
-    /** Small number box that saves its value (minutes) as soon as it changes. */
-    private EditText minuteBox(String key, int value) {
+    private int minutes(String key) {
+        return Library.KEY_TALK_MIN.equals(key) ? Library.talkMinutes(this) : Library.silenceMinutes(this);
+    }
+
+    private void changeMinutes(String key, int delta) {
+        int m = Math.max(1, Math.min(600, minutes(key) + delta));
+        Library.prefs(this).edit().putInt(key, m).apply();
+        updateSettingsText();
+    }
+
+    private void typeMinutes(String key) {
         EditText e = new EditText(this);
         e.setInputType(InputType.TYPE_CLASS_NUMBER);
-        e.setText(String.valueOf(value));
-        e.setTextSize(18);
-        e.setGravity(Gravity.CENTER);
-        e.setMinEms(2);
+        e.setText(String.valueOf(minutes(key)));
         e.setSelectAllOnFocus(true);
-        e.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
-            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
-            @Override public void afterTextChanged(Editable s) {
-                try {
-                    int m = Integer.parseInt(s.toString().trim());
-                    if (m >= 1 && m <= 600) {
-                        Library.prefs(MainActivity.this).edit().putInt(key, m).apply();
-                        updateCycleButton();
-                    }
-                } catch (NumberFormatException ignored) {}
-            }
-        });
-        return e;
+        new AlertDialog.Builder(this)
+                .setTitle("ចំនួននាទី")
+                .setView(e)
+                .setPositiveButton("OK", (d, w) -> {
+                    try {
+                        int m = Integer.parseInt(e.getText().toString().trim());
+                        if (m >= 1 && m <= 600) {
+                            Library.prefs(this).edit().putInt(key, m).apply();
+                            updateSettingsText();
+                        }
+                    } catch (NumberFormatException ignored) {}
+                })
+                .setNegativeButton("បោះបង់", null)
+                .show();
     }
 
-    private void updateCycleButton() {
-        boolean on = Library.prefs(this).getBoolean(Library.KEY_CYCLE, true);
-        int t = Library.talkMinutes(this), s = Library.silenceMinutes(this);
-        cycleBtn.setText(on
-                ? "ចាក់/ស្ងាត់: បើក  (ចាក់ " + t + " នាទី → ស្ងាត់ " + s + " នាទី)"
-                : "ចាក់/ស្ងាត់: បិទ  (លេងជាប់ធម្មតា)");
-        if (loopBtn != null) {
-            loopBtn.setText(Library.loop(this)
-                    ? "🔁 Loop: បើក  (ចប់ File ចុងក្រោយ → ចាប់ផ្ដើម File ទី១ ម្ដងទៀត)"
-                    : "🔁 Loop: បិទ  (ឈប់ពេលចប់ File ចុងក្រោយ)");
+    private void updateSettingsText() {
+        talkVal.setText(Library.talkMinutes(this) + " នាទី");
+        silVal.setText(Library.silenceMinutes(this) + " នាទី");
+        boolean drive = "drive".equals(Library.prefs(this).getString(Library.KEY_SOURCE, "local"));
+        String label = Library.prefs(this).getString(Library.KEY_SOURCE_LABEL, null);
+        sourceLabel.setText(label == null ? "មិនទាន់ជ្រើស" : "កំពុងប្រើ: " + label);
+        driveRow.setVisibility(drive ? View.VISIBLE : View.GONE);
+        if (drive) driveInfo.setText("បានទាញយកទុក: " + Drive.savedMb(this) + " MB");
+    }
+
+    // ------------------------------------------------------------------ playlist
+
+    private final class PlaylistAdapter extends BaseAdapter {
+        @Override public int getCount() { return Library.names.size(); }
+        @Override public Object getItem(int i) { return Library.names.get(i); }
+        @Override public long getItemId(int i) { return i; }
+
+        @Override public View getView(int i, View convert, ViewGroup parent) {
+            LinearLayout r;
+            if (convert == null) {
+                r = row();
+                r.setPadding(dp(10), dp(10), dp(10), dp(10));
+                TextView num = text("", 14, BROWN, true);
+                num.setGravity(Gravity.CENTER);
+                r.addView(num, new LinearLayout.LayoutParams(dp(34), dp(34)));
+                TextView name = text("", 15, TEXT, false);
+                name.setMaxLines(2);
+                name.setEllipsize(TextUtils.TruncateAt.END);
+                name.setPadding(dp(12), 0, dp(8), 0);
+                r.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                TextView badge = text("", 14, MUTED, false);
+                r.addView(badge);
+                r.setTag(new TextView[]{num, name, badge});
+            } else {
+                r = (LinearLayout) convert;
+            }
+            TextView[] v = (TextView[]) r.getTag();
+            TextView num = v[0], name = v[1], badge = v[2];
+
+            PlayerService ps = PlayerService.instance;
+            int current = ps != null ? ps.index() : Library.prefs(MainActivity.this).getInt(Library.KEY_INDEX, -1);
+            boolean isCur = i == current;
+            num.setText(isCur ? "▶" : String.valueOf(i + 1));
+            num.setBackground(circle(isCur ? BROWN : HILITE));
+            num.setTextColor(isCur ? Color.WHITE : BROWN);
+            name.setText(Library.names.get(i));
+            name.setTypeface(isCur ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            r.setBackground(round(isCur ? HILITE : CARD, 12));
+            Uri u = Library.uris.get(i);
+            if (Library.isDrive(u)) badge.setText(Drive.isSaved(MainActivity.this, Library.driveId(u)) ? "✓" : "☁️");
+            else badge.setText("");
+            return r;
         }
     }
 
+    private void showList() {
+        adapter.notifyDataSetChanged();
+        listHeader.setText("បញ្ជីវគ្គ (" + Library.names.size() + ")");
+        int last = Library.prefs(this).getInt(Library.KEY_INDEX, -1);
+        if (last >= 0 && last < Library.names.size()) {
+            title.setText(Library.names.get(last));
+            long pos = Library.prefs(this).getLong(Library.KEY_POS, 0);
+            statusPill.setText("ចុច ▶ ដើម្បីលេងបន្តពី " + Library.time(pos));
+        } else if (!Library.names.isEmpty()) {
+            title.setText("ចុចលើវគ្គណាមួយខាងក្រោម");
+            statusPill.setText("រួចរាល់");
+        } else {
+            title.setText("សូមជ្រើស MP3 នៅក្នុង ⚙️ ការកំណត់");
+            statusPill.setText("មិនទាន់មាន File");
+        }
+        updateSettingsText();
+    }
+
+    // ------------------------------------------------------------------ sources
+
+    private void stopPlayer() {
+        if (PlayerService.instance != null) {
+            startService(new Intent(this, PlayerService.class).setAction(PlayerService.ACTION_STOP));
+        }
+    }
+
+    private void chooseLocalFolder() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(i, REQ_FOLDER);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_FOLDER && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            Uri tree = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) {}
+            stopPlayer();
+            String folderName = "📁 Folder ក្នុងទូរស័ព្ទ";
+            try {
+                String id = DocumentsContract.getTreeDocumentId(tree);
+                int c = id.lastIndexOf(':');
+                if (c >= 0 && c + 1 < id.length()) folderName = "📁 " + id.substring(c + 1);
+            } catch (Exception ignored) {}
+            Library.prefs(this).edit()
+                    .putString(Library.KEY_SOURCE, "local")
+                    .putString(Library.KEY_SOURCE_LABEL, folderName)
+                    .putString(Library.KEY_TREE, tree.toString())
+                    .putInt(Library.KEY_INDEX, 0)
+                    .putLong(Library.KEY_POS, 0)
+                    .apply();
+            if (Library.load(this, tree)) {
+                showList();
+                settingsPanel.setVisibility(View.GONE);
+                Toast.makeText(this, Library.names.size() + " File", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    private void askDriveLink() {
+        EditText e = new EditText(this);
+        e.setHint("https://drive.google.com/drive/folders/...");
+        e.setSingleLine(true);
+        e.setText(Library.prefs(this).getString(Library.KEY_DRIVE_LINK, ""));
+        LinearLayout box = new LinearLayout(this);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        box.addView(e, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        new AlertDialog.Builder(this)
+                .setTitle("☁️ Link Folder Google Drive")
+                .setMessage("បិទភ្ជាប់ (Paste) Link Folder។\nFolder ត្រូវ Share ជា \"Anyone with the link\"។\n"
+                        + "File នីមួយៗនឹងទាញយកទុកក្នុងទូរស័ព្ទមុនពេលចាក់ (តែម្ដងប៉ុណ្ណោះ)។")
+                .setView(box)
+                .setPositiveButton("បើក", (d, w) -> loadDriveFolder(e.getText().toString()))
+                .setNegativeButton("បោះបង់", null)
+                .show();
+    }
+
+    private void loadDriveFolder(String link) {
+        String id = Drive.folderId(link);
+        if (id == null) {
+            Toast.makeText(this, "Link មិនត្រឹមត្រូវ", Toast.LENGTH_LONG).show();
+            return;
+        }
+        statusPill.setText("☁️ កំពុងអាន Folder…");
+        new Thread(() -> {
+            try {
+                Drive.Listing l = Drive.list(id);
+                runOnUiThread(() -> {
+                    if (l.ids.isEmpty()) {
+                        statusPill.setText("រកមិនឃើញ MP3");
+                        Toast.makeText(this, "រកមិនឃើញ MP3 ក្នុង Folder នេះទេ", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    stopPlayer();
+                    Library.saveDrive(this, link.trim(), l);
+                    Library.loadDrive(this);
+                    showList();
+                    settingsPanel.setVisibility(View.GONE);
+                    Toast.makeText(this, l.ids.size() + " File ពី Google Drive", Toast.LENGTH_SHORT).show();
+                });
+            } catch (Exception ex) {
+                runOnUiThread(() -> {
+                    String msg = "not-shared".equals(ex.getMessage())
+                            ? "Folder មិនទាន់ Share ជា \"Anyone with the link\""
+                            : "អាន Folder មិនបាន — សូមពិនិត្យ Internet";
+                    statusPill.setText("⚠️ " + msg);
+                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
+    }
+
+    private void confirmClearDrive() {
+        new AlertDialog.Builder(this)
+                .setTitle("លុប File ដែលបានទាញយក?")
+                .setMessage("File នឹងត្រូវទាញយកម្ដងទៀតពេលចាក់។ (" + Drive.savedMb(this) + " MB)")
+                .setPositiveButton("លុប", (d, w) -> {
+                    stopPlayer();
+                    Drive.clearSaved(this);
+                    updateSettingsText();
+                    adapter.notifyDataSetChanged();
+                })
+                .setNegativeButton("បោះបង់", null)
+                .show();
+    }
+
+    // ------------------------------------------------------------------ actions
+
     private void send(String action) {
         if (Library.uris.isEmpty()) {
-            Toast.makeText(this, "សូមជ្រើសរើស Folder មុន", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "សូមជ្រើស MP3 នៅក្នុង ⚙️ ការកំណត់", Toast.LENGTH_SHORT).show();
+            settingsPanel.setVisibility(View.VISIBLE);
             return;
         }
         startForegroundService(new Intent(this, PlayerService.class).setAction(action));
@@ -259,85 +631,55 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_FOLDER && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            Uri tree = data.getData();
-            try {
-                getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (Exception ignored) {}
-            Library.prefs(this).edit()
-                    .putString(Library.KEY_TREE, tree.toString())
-                    .putInt(Library.KEY_INDEX, 0)
-                    .putLong(Library.KEY_POS, 0)
-                    .apply();
-            if (Library.load(this, tree)) {
-                showList();
-                Toast.makeText(this, Library.names.size() + " files", Toast.LENGTH_SHORT).show();
-            }
-        }
-    }
+    // ------------------------------------------------------------------ refresh
 
-    private void showList() {
-        adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_activated_1, Library.names);
-        list.setAdapter(adapter);
-        int last = Library.prefs(this).getInt(Library.KEY_INDEX, -1);
-        if (last >= 0 && last < Library.names.size()) {
-            title.setText(Library.names.get(last));
-            long pos = Library.prefs(this).getLong(Library.KEY_POS, 0);
-            timeText.setText("ចុច ▶ ដើម្បីលេងបន្តពី " + Library.time(pos));
-            list.setItemChecked(last, true);
-        } else {
-            title.setText("ចុចលើវគ្គណាមួយ");
-        }
-    }
+    private int lastListIndex = -2;
+    private int tickCount;
 
     private void refresh() {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        batteryBtn.setVisibility(pm.isIgnoringBatteryOptimizations(getPackageName()) ? View.GONE : View.VISIBLE);
+        batteryBanner.setVisibility(pm.isIgnoringBatteryOptimizations(getPackageName()) ? View.GONE : View.VISIBLE);
 
         PlayerService ps = PlayerService.instance;
         if (ps == null) {
             playBtn.setText("▶");
-            cycleStatus.setText("");
             return;
         }
-        if (ps.isInSilence()) {
-            cycleStatus.setTextColor(Color.rgb(0x8D, 0x5A, 0x2B));
-            cycleStatus.setText("🔇 ស្ងាត់ — នៅសល់ " + Library.time(ps.silenceRemaining()) + "  (ចុច ▶ ដើម្បីរំលង)");
-        } else if (ps.cycleEnabled() && ps.isPlaying()) {
-            cycleStatus.setTextColor(Color.DKGRAY);
-            cycleStatus.setText("🔊 និយាយ — ស្ងាត់ក្នុងរយៈ " + Library.time(ps.talkRemaining()));
-        } else {
-            cycleStatus.setText("");
-        }
         int i = ps.index();
-        if (i >= 0 && i < Library.names.size()) {
-            title.setText(Library.names.get(i));
-            if (list.getCheckedItemPosition() != i) list.setItemChecked(i, true);
+        if (i >= 0 && i < Library.names.size()) title.setText(Library.names.get(i));
+        // redraw the list when the lesson changes, and every few seconds for download ticks
+        if (i != lastListIndex || (++tickCount % 6 == 0)) {
+            lastListIndex = i;
+            adapter.notifyDataSetChanged();
+            if (settingsPanel.getVisibility() == View.VISIBLE) updateSettingsText();
         }
-        playBtn.setText(ps.isPlaying() ? "⏸" : "▶");
+
+        boolean playing = ps.isPlaying();
+        playBtn.setText(playing ? "⏸" : "▶");
+
+        if (ps.isDownloading()) {
+            statusPill.setText("☁️ កំពុងទាញយក " + ps.downloadPercent() + "%");
+        } else if (ps.lastError() != null) {
+            statusPill.setText("⚠️ " + ps.lastError());
+        } else if (ps.isInSilence()) {
+            statusPill.setText("🔇 ស្ងាត់ — នៅសល់ " + Library.time(ps.silenceRemaining()));
+        } else if (playing && ps.cycleEnabled()) {
+            statusPill.setText("🔊 កំពុងចាក់ — ស្ងាត់ក្នុង " + Library.time(ps.talkRemaining()));
+        } else if (playing) {
+            statusPill.setText("🔊 កំពុងចាក់");
+        } else {
+            statusPill.setText("⏸ ផ្អាក");
+        }
+
         long dur = ps.duration();
         long pos = ps.position();
         if (dur > 0) {
             seek.setMax((int) dur);
+            durText.setText(Library.time(dur));
             if (!userSeeking) {
                 seek.setProgress((int) pos);
-                timeText.setText(Library.time(pos) + " / " + Library.time(dur));
+                posText.setText(Library.time(pos));
             }
         }
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        handler.post(ticker);
-    }
-
-    @Override
-    protected void onPause() {
-        handler.removeCallbacks(ticker);
-        super.onPause();
     }
 }
