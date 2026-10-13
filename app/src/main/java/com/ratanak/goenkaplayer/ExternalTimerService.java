@@ -12,7 +12,10 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioTrack;
 import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
@@ -116,6 +119,10 @@ public class ExternalTimerService extends Service {
     private long lastTick;
     private long silenceEndsAt;   // elapsedRealtime
     private int noteTick;
+    private MediaController target;      // the session we control (kept even while it is paused)
+    private int resumeTry = -1;          // >=0 while we are trying to get the app playing again
+    private KeepAlive keepAlive;
+    private PowerManager.WakeLock screenWl;
 
     public String label() { return label; }
     public boolean isInSilence() { return inSilence; }
@@ -158,6 +165,8 @@ public class ExternalTimerService extends Service {
             return START_NOT_STICKY;
         }
         pkg = mc.getPackageName();
+        target = mc;
+        resumeTry = -1;
         label = appName(this, pkg);
         talkedMs = 0;
         inSilence = false;
@@ -184,7 +193,7 @@ public class ExternalTimerService extends Service {
             long now = SystemClock.elapsedRealtime();
             long dt = now - lastTick;
             lastTick = now;
-            MediaController mc = findController(ExternalTimerService.this, pkg);
+            MediaController mc = controller();
             boolean playing = isPlaying(mc);
             if (!inSilence) {
                 if (playing) talkedMs += dt;
@@ -195,6 +204,7 @@ public class ExternalTimerService extends Service {
                     inSilence = false;
                     talkedMs = 0;
                     cancelAlarm();
+                    stopKeepAlive();
                 } else if (now >= silenceEndsAt) {
                     endSilence();
                 }
@@ -205,6 +215,7 @@ public class ExternalTimerService extends Service {
     };
 
     private void startSilence(MediaController mc) {
+        h.removeCallbacks(resumeStep);
         boolean sent = false;
         if (mc != null) {
             try { mc.getTransportControls().pause(); sent = true; } catch (Exception ignored) {}
@@ -212,23 +223,145 @@ public class ExternalTimerService extends Service {
         if (!sent) mediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE);
         inSilence = true;
         talkedMs = 0;
+        resumeTry = -1;
         silenceEndsAt = SystemClock.elapsedRealtime() + silenceMs();
         scheduleAlarm(System.currentTimeMillis() + silenceMs());
+        // keep the phone's audio system awake during the silence (stops deep sleep)
+        h.postDelayed(this::startKeepAliveIfSilent, 1500);
         updateNote();
     }
 
     private void endSilence() {
         cancelAlarm();
+        stopKeepAlive();
         inSilence = false;
         talkedMs = 0;
         lastTick = SystemClock.elapsedRealtime();
-        MediaController mc = findController(this, pkg);
-        boolean sent = false;
-        if (mc != null) {
-            try { mc.getTransportControls().play(); sent = true; } catch (Exception ignored) {}
-        }
-        if (!sent) mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY);
+        resumeTry = 0;
+        h.removeCallbacks(resumeStep);
+        h.post(resumeStep);
         updateNote();
+    }
+
+    /** The other app's session: a fresh one if Android lists it, otherwise the one we kept. */
+    private MediaController controller() {
+        MediaController mc = findController(this, pkg);
+        if (mc != null) target = mc;
+        return mc != null ? mc : target;
+    }
+
+    /**
+     * Presses play, checks 2.5 s later whether the app really plays, and tries harder each time:
+     * session play → fresh session play → media key PLAY → PLAY_PAUSE key → wake the screen briefly.
+     */
+    private final Runnable resumeStep = new Runnable() {
+        @Override
+        public void run() {
+            if (instance == null || inSilence || resumeTry < 0) return;
+            MediaController mc = controller();
+            if (resumeTry > 0 && isPlaying(mc)) {       // it worked
+                resumeTry = -1;
+                releaseScreen();
+                return;
+            }
+            if (resumeTry >= 12) {                       // give up after ~30 s
+                resumeTry = -1;
+                releaseScreen();
+                getSystemService(NotificationManager.class).notify(NOTIF,
+                        note("⚠️ ចាក់ " + label + " វិញមិនបាន — សូមចុច Play ដោយដៃ"));
+                return;
+            }
+            switch (resumeTry % 4) {
+                case 0:
+                    if (mc != null) { try { mc.getTransportControls().play(); } catch (Exception ignored) {} }
+                    else mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY);
+                    break;
+                case 1:
+                    mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY);
+                    break;
+                case 2:
+                    wakeScreen();     // some phones keep a paused app frozen until the screen wakes
+                    if (mc != null) { try { mc.getTransportControls().play(); } catch (Exception ignored) {} }
+                    break;
+                default:
+                    mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+                    break;
+            }
+            resumeTry++;
+            h.postDelayed(this, 2500);
+        }
+    };
+
+    @SuppressWarnings("deprecation")
+    private void wakeScreen() {
+        try {
+            if (screenWl == null) {
+                screenWl = ((PowerManager) getSystemService(POWER_SERVICE)).newWakeLock(
+                        PowerManager.SCREEN_DIM_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                        "GoenkaPlayer:extWake");
+                screenWl.setReferenceCounted(false);
+            }
+            screenWl.acquire(8000);
+        } catch (Exception ignored) {}
+    }
+
+    private void releaseScreen() {
+        try { if (screenWl != null && screenWl.isHeld()) screenWl.release(); } catch (Exception ignored) {}
+    }
+
+    // ---------------- quiet keep-alive sound during the silence ----------------
+
+    private static final class KeepAlive extends Thread {
+        private volatile boolean running = true;
+
+        @Override public void run() {
+            int sr = 22050;
+            int min = AudioTrack.getMinBufferSize(sr, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            AudioTrack track = null;
+            try {
+                track = new AudioTrack.Builder()
+                        .setAudioAttributes(new AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                .build())
+                        .setAudioFormat(new AudioFormat.Builder()
+                                .setSampleRate(sr)
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                .build())
+                        .setBufferSizeInBytes(Math.max(min, sr))
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .build();
+                track.play();
+                short[] buf = new short[sr / 10];
+                java.util.Random rnd = new java.util.Random();
+                while (running) {
+                    for (int i = 0; i < buf.length; i++) buf[i] = (short) (rnd.nextInt(9) - 4);
+                    track.write(buf, 0, buf.length);
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (track != null) {
+                    try { track.stop(); } catch (Exception ignored) {}
+                    track.release();
+                }
+            }
+        }
+
+        void finish() { running = false; }
+    }
+
+    private void startKeepAliveIfSilent() {
+        if (instance == null || !inSilence || keepAlive != null) return;
+        keepAlive = new KeepAlive();
+        keepAlive.start();
+    }
+
+    private void stopKeepAlive() {
+        if (keepAlive != null) {
+            keepAlive.finish();
+            keepAlive = null;
+        }
     }
 
     private void mediaKey(int code) {
@@ -283,6 +416,7 @@ public class ExternalTimerService extends Service {
 
     public String statusText() {
         if (inSilence) return "🔇 ស្ងាត់ — ចាក់វិញក្នុង " + Library.time(silenceRemaining());
+        if (resumeTry >= 0) return "▶ កំពុងបើក " + label + " វិញ…";
         return "🔊 ចាក់ — ស្ងាត់ក្នុង " + Library.time(talkRemaining());
     }
 
@@ -294,6 +428,9 @@ public class ExternalTimerService extends Service {
     private void stopAll() {
         instance = null;
         h.removeCallbacks(tick);
+        h.removeCallbacks(resumeStep);
+        stopKeepAlive();
+        releaseScreen();
         cancelAlarm();
         if (wl != null && wl.isHeld()) wl.release();
         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -304,6 +441,9 @@ public class ExternalTimerService extends Service {
     public void onDestroy() {
         instance = null;
         h.removeCallbacks(tick);
+        h.removeCallbacks(resumeStep);
+        stopKeepAlive();
+        releaseScreen();
         if (wl != null && wl.isHeld()) wl.release();
         super.onDestroy();
     }
