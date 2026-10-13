@@ -152,7 +152,7 @@ public final class Drive {
                 out.ids.add(id);
             }
         }
-        if (out.ids.isEmpty() && out.folderIds.isEmpty() && !html.contains("flip-entry")) {
+        if (out.ids.isEmpty() && out.folderIds.isEmpty() && !html.contains("flip-entries") && !html.contains("flip-contents")) {
             throw new Exception("not-shared");
         }
         return out;
