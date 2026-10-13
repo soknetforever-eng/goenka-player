@@ -23,8 +23,22 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Signing key (from repository secrets)
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/goenka.jks"
+            echo "KS_PATH=$RUNNER_TEMP/goenka.jks" >> "$GITHUB_ENV"
+            echo "Using fixed signing key"
+          else
+            echo "No KEYSTORE_B64 secret: using debug key"
+          fi
+
       - name: Build release APK
-        run: gradle assembleRelease --no-daemon --stacktrace
+        env:
+          KS_PASS: ${{ secrets.KEYSTORE_PASS }}
+        run: gradle assembleRelease -Pvc=${{ github.run_number }} --no-daemon --stacktrace
 
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk GoenkaPlayer.apk
