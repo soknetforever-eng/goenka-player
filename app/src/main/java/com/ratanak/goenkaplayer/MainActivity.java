@@ -865,7 +865,7 @@ public class MainActivity extends Activity {
         showTimes.run();
 
         // days
-        box.addView(text("ថ្ងៃ:", 14, MUTED, false));
+        box.addView(text("ថ្ងៃ: (មិនជ្រើស = រៀងរាល់ថ្ងៃ)", 14, MUTED, false));
         LinearLayout daysRow = row();
         for (int d = 0; d < 7; d++) {
             final int bit = d;
@@ -939,10 +939,6 @@ public class MainActivity extends Activity {
                 .setTitle(existing == null ? "⏰ កាលវិភាគថ្មី" : "⏰ កែកាលវិភាគ")
                 .setView(sv)
                 .setPositiveButton("រក្សាទុក", (d, w) -> {
-                    if (it.days == 0) {
-                        Toast.makeText(this, "សូមជ្រើសយ៉ាងហោចណាស់មួយថ្ងៃ", Toast.LENGTH_LONG).show();
-                        return;
-                    }
                     it.cycle = cyc.isChecked();
                     try { it.talk = Math.max(1, Math.min(600, Integer.parseInt(talkIn.getText().toString().trim()))); } catch (Exception ignored) {}
                     try { it.sil = Math.max(1, Math.min(600, Integer.parseInt(silIn.getText().toString().trim()))); } catch (Exception ignored) {}

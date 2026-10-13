@@ -45,7 +45,7 @@ public final class Schedules {
         public boolean on = true;
         public int start = 6 * 60;
         public int end = 7 * 60;
-        public int days = 0x7F;
+        public int days = 0;              // 0 = every day
         public String source = "drive";   // "drive" or "local"
         public String playlist = "";      // Drive playlist name
         public String tree = "";          // local folder
@@ -69,7 +69,7 @@ public final class Schedules {
             it.on = o.optBoolean("on", true);
             it.start = o.optInt("s", it.start);
             it.end = o.optInt("e", it.end);
-            it.days = o.optInt("d", it.days);
+            it.days = o.optInt("d", 0);
             it.source = o.optString("src", "drive");
             it.playlist = o.optString("pl", "");
             it.tree = o.optString("tr", "");
@@ -86,7 +86,7 @@ public final class Schedules {
         }
 
         public String daysText() {
-            if (days == 0x7F) return "រៀងរាល់ថ្ងៃ";
+            if (days == 0 || days == 0x7F) return "រៀងរាល់ថ្ងៃ";
             if (days == 0x1F) return "ច័ន្ទ–សុក្រ";
             if (days == 0x60) return "សៅរ៍–អាទិត្យ";
             StringBuilder b = new StringBuilder();
@@ -196,7 +196,8 @@ public final class Schedules {
         cal.add(Calendar.DAY_OF_MONTH, -1);
         for (int d = 0; d < 9; d++) {
             int bit = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7;   // Monday = 0 … Sunday = 6
-            if ((it.days & (1 << bit)) != 0) {
+            int days = it.days == 0 ? 0x7F : it.days;   // nothing picked = every day
+            if ((days & (1 << bit)) != 0) {
                 Calendar s = (Calendar) cal.clone();
                 s.set(Calendar.HOUR_OF_DAY, it.start / 60);
                 s.set(Calendar.MINUTE, it.start % 60);
