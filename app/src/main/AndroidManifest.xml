@@ -77,6 +77,10 @@
             </intent-filter>
         </service>
 
+        <receiver
+            android:name=".Schedules$Receiver"
+            android:exported="false" />
+
         <provider
             android:name=".ApkProvider"
             android:authorities="com.ratanak.goenkaplayer.apk"
