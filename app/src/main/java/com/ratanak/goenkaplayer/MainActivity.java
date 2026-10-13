@@ -44,6 +44,8 @@ public class MainActivity extends Activity {
     private static final int MUTED = Color.rgb(0x8A, 0x7D, 0x70);
     private static final int HILITE = Color.rgb(0xFC, 0xEB, 0xCF);
 
+    private TextView updateInfo;
+    private Button installBtn, updateNowBtn;
     private TextView title, statusPill, posText, durText, sourceLabel, listHeader, driveInfo, talkVal, silVal;
     private SeekBar seek;
     private Button playBtn;
@@ -74,6 +76,7 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         }
 
+        Updater.schedule(this);
         boolean loaded = Library.ensureLoaded(this);
         showList();
         settingsPanel.setVisibility(loaded ? View.GONE : View.VISIBLE);
@@ -348,6 +351,49 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lsp.topMargin = dp(8);
         set.addView(loopSwitch, lsp);
+
+        // ---- updates ----
+        View line2 = new View(this);
+        line2.setBackgroundColor(Color.rgb(0xEE, 0xE4, 0xD6));
+        LinearLayout.LayoutParams ll2 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        ll2.setMargins(0, dp(12), 0, dp(10));
+        set.addView(line2, ll2);
+        set.addView(text("🔄 Update", 15, BROWN, true));
+
+        Switch autoSwitch = new Switch(this);
+        autoSwitch.setText("ឆែក Update ស្វ័យប្រវត្តិ រៀងរាល់ម៉ោង 2:00 យប់");
+        autoSwitch.setTextSize(15);
+        autoSwitch.setTextColor(TEXT);
+        autoSwitch.setChecked(Updater.autoEnabled(this));
+        autoSwitch.setOnCheckedChangeListener((b, on) -> {
+            Library.prefs(this).edit().putBoolean(Updater.KEY_AUTO, on).apply();
+            Updater.schedule(this);
+        });
+        LinearLayout.LayoutParams asp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        asp.topMargin = dp(6);
+        set.addView(autoSwitch, asp);
+
+        updateNowBtn = pillButton("🔄  Update ឥឡូវ", BROWN, Color.WHITE);
+        updateNowBtn.setOnClickListener(v -> {
+            if (UpdateService.running) return;
+            startForegroundService(new Intent(this, UpdateService.class).setAction(UpdateService.ACTION_MANUAL));
+            Toast.makeText(this, "កំពុងឆែក Update…", Toast.LENGTH_SHORT).show();
+        });
+        LinearLayout.LayoutParams ub = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+        ub.topMargin = dp(8);
+        set.addView(updateNowBtn, ub);
+
+        installBtn = pillButton("", Color.rgb(0x2E, 0x7D, 0x32), Color.WHITE);
+        installBtn.setOnClickListener(v -> installUpdate());
+        installBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams ib = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+        ib.topMargin = dp(8);
+        set.addView(installBtn, ib);
+
+        updateInfo = text("", 13, MUTED, false);
+        updateInfo.setPadding(0, dp(6), 0, 0);
+        set.addView(updateInfo);
         root.addView(set, cardParams());
 
         // ---- playlist ----
@@ -636,7 +682,59 @@ public class MainActivity extends Activity {
     private int lastListIndex = -2;
     private int tickCount;
 
+    private void installUpdate() {
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            Toast.makeText(this, "សូមអនុញ្ញាត \"Install unknown apps\" រួចចុចដំឡើងម្ដងទៀត", Toast.LENGTH_LONG).show();
+            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getPackageName())));
+            return;
+        }
+        try {
+            startActivity(ApkProvider.installIntent());
+        } catch (Exception e) {
+            Toast.makeText(this, "បើកមិនបាន", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void refreshUpdateInfo() {
+        String ver = "កំណែ v" + Updater.currentVersionName(this);
+        if (UpdateService.running) {
+            updateInfo.setText(ver + "\n⏳ " + UpdateService.progress);
+            updateNowBtn.setText("⏳  កំពុង Update…");
+        } else {
+            String when = Library.prefs(this).getString(Updater.KEY_LAST_CHECK, null);
+            String msg = Library.prefs(this).getString(Updater.KEY_LAST_MSG, "");
+            updateInfo.setText(ver + (when == null ? "" : "  •  ឆែកចុងក្រោយ: " + when + "\n" + msg));
+            updateNowBtn.setText("🔄  Update ឥឡូវ");
+        }
+        // pending install?
+        String tag = Library.prefs(this).getString(Updater.KEY_PENDING_TAG, null);
+        long tagNum = -1;
+        if (tag != null) {
+            try { tagNum = Long.parseLong(tag.substring(tag.lastIndexOf('.') + 1)); } catch (Exception ignored) {}
+        }
+        if (tagNum > Updater.currentVersion(this) && ApkProvider.file(this).exists()) {
+            installBtn.setText("⬇️  ដំឡើងកំណែថ្មី " + tag);
+            installBtn.setVisibility(View.VISIBLE);
+        } else {
+            installBtn.setVisibility(View.GONE);
+            if (tag != null) {
+                Library.prefs(this).edit().remove(Updater.KEY_PENDING_TAG).remove(Updater.KEY_PENDING_APK).apply();
+                ApkProvider.file(this).delete();
+            }
+        }
+    }
+
+    private int uiTick;
+
     private void refresh() {
+        if (++uiTick % 2 == 0) {
+            refreshUpdateInfo();
+            if (!UpdateService.running && Library.uris.isEmpty() == false) {
+                listHeader.setText("បញ្ជីវគ្គ (" + Library.names.size() + ")");
+            }
+        }
+        if (PlayerService.instance == null && uiTick % 6 == 0) adapter.notifyDataSetChanged();
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         batteryBanner.setVisibility(pm.isIgnoringBatteryOptimizations(getPackageName()) ? View.GONE : View.VISIBLE);
 

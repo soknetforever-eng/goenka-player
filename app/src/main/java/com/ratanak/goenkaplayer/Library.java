@@ -85,6 +85,26 @@ public final class Library {
                 .apply();
     }
 
+    /** Updates only the saved Drive file list (keeps the current lesson and position). */
+    public static void saveDriveListOnly(Context c, Drive.Listing l) {
+        org.json.JSONArray a = new org.json.JSONArray();
+        for (int i = 0; i < l.ids.size(); i++) {
+            org.json.JSONArray e = new org.json.JSONArray();
+            e.put(l.names.get(i));
+            e.put(l.ids.get(i));
+            a.put(e);
+        }
+        prefs(c).edit().putString(KEY_DRIVE_LIST, a.toString()).apply();
+    }
+
+    public static int driveCount(Context c) {
+        try {
+            return new org.json.JSONArray(prefs(c).getString(KEY_DRIVE_LIST, "[]")).length();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     private static void sortByLesson(List<String[]> items) {
         Collections.sort(items, (a, b) -> {
             long na = lessonNumber(a[0]), nb = lessonNumber(b[0]);
