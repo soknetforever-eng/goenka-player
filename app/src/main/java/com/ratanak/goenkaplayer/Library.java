@@ -42,16 +42,57 @@ public final class Library {
     public static boolean isDrive(Uri u) { return u != null && "gdrive".equals(u.getScheme()); }
 
     public static String driveId(Uri u) { return u.getSchemeSpecificPart(); }
+    /** Saved Drive playlists: [{"n":name,"id":folderId,"f":[[file,id],...]}, ...] */
+    public static final String KEY_DRIVE_TREE = "drive_tree";
+    public static final String KEY_PLAYLIST = "drive_playlist";
 
-    /** Fills the playlist from a saved Drive listing (no internet needed). */
+    private static org.json.JSONArray tree(Context c) {
+        try {
+            String t = prefs(c).getString(KEY_DRIVE_TREE, null);
+            if (t != null) return new org.json.JSONArray(t);
+            // older versions stored a single list
+            String old = prefs(c).getString(KEY_DRIVE_LIST, null);
+            org.json.JSONArray a = new org.json.JSONArray();
+            if (old != null) {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("n", "Google Drive");
+                o.put("id", "");
+                o.put("f", new org.json.JSONArray(old));
+                a.put(o);
+            }
+            return a;
+        } catch (Exception e) {
+            return new org.json.JSONArray();
+        }
+    }
+
+    public static List<String> playlistNames(Context c) {
+        List<String> out = new ArrayList<>();
+        org.json.JSONArray a = tree(c);
+        for (int i = 0; i < a.length(); i++) out.add(a.optJSONObject(i).optString("n"));
+        return out;
+    }
+
+    public static int playlistSize(Context c, int i) {
+        org.json.JSONObject o = tree(c).optJSONObject(i);
+        return o == null ? 0 : o.optJSONArray("f").length();
+    }
+
+    public static int selectedPlaylist(Context c) {
+        int n = tree(c).length();
+        int s = prefs(c).getInt(KEY_PLAYLIST, 0);
+        return (s >= 0 && s < n) ? s : 0;
+    }
+
+    /** Fills the lesson list from the selected Drive playlist (no internet needed). */
     public static boolean loadDrive(Context c) {
-        String json = prefs(c).getString(KEY_DRIVE_LIST, null);
-        if (json == null) return false;
+        org.json.JSONArray a = tree(c);
+        if (a.length() == 0) return false;
         List<String[]> items = new ArrayList<>();
         try {
-            org.json.JSONArray a = new org.json.JSONArray(json);
-            for (int i = 0; i < a.length(); i++) {
-                org.json.JSONArray e = a.getJSONArray(i);
+            org.json.JSONArray f = a.getJSONObject(selectedPlaylist(c)).getJSONArray("f");
+            for (int i = 0; i < f.length(); i++) {
+                org.json.JSONArray e = f.getJSONArray(i);
                 items.add(new String[]{e.getString(0), e.getString(1)});
             }
         } catch (Exception e) {
@@ -67,42 +108,58 @@ public final class Library {
         return true;
     }
 
-    public static void saveDrive(Context c, String link, Drive.Listing l) {
+    /** Saves the scanned Drive folders. newLink = true when a different link was entered. */
+    public static void saveDriveTree(Context c, String link, List<Drive.Playlist> lists, boolean newLink) {
+        String selectedName = null;
+        List<String> oldNames = playlistNames(c);
+        int oldSel = selectedPlaylist(c);
+        if (!newLink && oldSel < oldNames.size()) selectedName = oldNames.get(oldSel);
+
         org.json.JSONArray a = new org.json.JSONArray();
-        for (int i = 0; i < l.ids.size(); i++) {
-            org.json.JSONArray e = new org.json.JSONArray();
-            e.put(l.names.get(i));
-            e.put(l.ids.get(i));
-            a.put(e);
+        int sel = 0;
+        try {
+            for (int i = 0; i < lists.size(); i++) {
+                Drive.Playlist p = lists.get(i);
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("n", p.name);
+                o.put("id", p.id);
+                org.json.JSONArray f = new org.json.JSONArray();
+                for (int k = 0; k < p.ids.size(); k++) {
+                    org.json.JSONArray e = new org.json.JSONArray();
+                    e.put(p.names.get(k));
+                    e.put(p.ids.get(k));
+                    f.put(e);
+                }
+                o.put("f", f);
+                a.put(o);
+                if (p.name.equals(selectedName)) sel = i;
+            }
+        } catch (Exception ignored) {
         }
-        prefs(c).edit()
+        SharedPreferences.Editor ed = prefs(c).edit()
                 .putString(KEY_SOURCE, "drive")
                 .putString(KEY_DRIVE_LINK, link)
-                .putString(KEY_DRIVE_LIST, a.toString())
-                .putString(KEY_SOURCE_LABEL, "Google Drive")
-                .putInt(KEY_INDEX, 0)
-                .putLong(KEY_POS, 0)
-                .apply();
+                .putString(KEY_DRIVE_TREE, a.toString())
+                .remove(KEY_DRIVE_LIST)
+                .putString(KEY_SOURCE_LABEL, "☁️ Google Drive (" + lists.size() + " Playlist)")
+                .putInt(KEY_PLAYLIST, sel);
+        if (newLink) ed.putInt(KEY_INDEX, 0).putLong(KEY_POS, 0);
+        ed.apply();
     }
 
-    /** Updates only the saved Drive file list (keeps the current lesson and position). */
-    public static void saveDriveListOnly(Context c, Drive.Listing l) {
-        org.json.JSONArray a = new org.json.JSONArray();
-        for (int i = 0; i < l.ids.size(); i++) {
-            org.json.JSONArray e = new org.json.JSONArray();
-            e.put(l.names.get(i));
-            e.put(l.ids.get(i));
-            a.put(e);
-        }
-        prefs(c).edit().putString(KEY_DRIVE_LIST, a.toString()).apply();
+    public static void selectPlaylist(Context c, int i) {
+        prefs(c).edit().putInt(KEY_PLAYLIST, i).putInt(KEY_INDEX, 0).putLong(KEY_POS, 0).apply();
+        loadDrive(c);
     }
 
     public static int driveCount(Context c) {
-        try {
-            return new org.json.JSONArray(prefs(c).getString(KEY_DRIVE_LIST, "[]")).length();
-        } catch (Exception e) {
-            return 0;
+        int sum = 0;
+        org.json.JSONArray a = tree(c);
+        for (int i = 0; i < a.length(); i++) {
+            org.json.JSONArray f = a.optJSONObject(i).optJSONArray("f");
+            if (f != null) sum += f.length();
         }
+        return sum;
     }
 
     private static void sortByLesson(List<String[]> items) {

@@ -50,7 +50,9 @@ public class MainActivity extends Activity {
     private SeekBar seek;
     private Button playBtn;
     private View batteryBanner, settingsPanel, driveRow;
-    private Button gearBtn;
+    private Button gearBtn, dlAllBtn;
+    private LinearLayout listHeaderRow, chips;
+    private View chipsScroll;
     private Switch cycleSwitch, loopSwitch;
     private ListView list;
     private PlaylistAdapter adapter;
@@ -406,9 +408,24 @@ public class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         // ---- playlist ----
+        // ---- Drive playlists (one per folder) ----
+        android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        chips = row();
+        chips.setPadding(dp(12), dp(10), dp(12), 0);
+        hs.addView(chips);
+        chipsScroll = hs;
+        root.addView(hs);
+
+        listHeaderRow = row();
+        listHeaderRow.setPadding(dp(20), dp(10), dp(12), dp(4));
         listHeader = text("បញ្ជីវគ្គ", 15, BROWN, true);
-        listHeader.setPadding(dp(20), dp(12), dp(20), dp(4));
-        root.addView(listHeader);
+        listHeaderRow.addView(listHeader, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        dlAllBtn = pillButton("⬇ ទាញយកទាំងអស់", HILITE, BROWN);
+        dlAllBtn.setTextSize(13);
+        dlAllBtn.setOnClickListener(v -> confirmDownloadAll());
+        listHeaderRow.addView(dlAllBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
+        root.addView(listHeaderRow);
 
         list = new ListView(this);
         list.setDivider(null);
@@ -485,7 +502,8 @@ public class MainActivity extends Activity {
     private void showSettings(boolean show) {
         settingsPanel.setVisibility(show ? View.VISIBLE : View.GONE);
         list.setVisibility(show ? View.GONE : View.VISIBLE);
-        listHeader.setVisibility(show ? View.GONE : View.VISIBLE);
+        listHeaderRow.setVisibility(show ? View.GONE : View.VISIBLE);
+        chipsScroll.setVisibility(show || !isDriveSource() || Library.playlistNames(this).size() < 2 ? View.GONE : View.VISIBLE);
         gearBtn.setText(show ? "✖  បិទ" : "⚙️  ការកំណត់");
         if (show) updateSettingsText();
     }
@@ -520,7 +538,11 @@ public class MainActivity extends Activity {
                 name.setEllipsize(TextUtils.TruncateAt.END);
                 name.setPadding(dp(12), 0, dp(8), 0);
                 r.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-                TextView badge = text("", 14, MUTED, false);
+                TextView badge = text("", 15, BROWN, true);
+                badge.setGravity(Gravity.CENTER);
+                badge.setMinWidth(dp(48));
+                badge.setPadding(dp(6), dp(8), dp(6), dp(8));
+                badge.setOnClickListener(bv -> onBadge((Integer) bv.getTag()));
                 r.addView(badge);
                 r.setTag(new TextView[]{num, name, badge});
             } else {
@@ -539,8 +561,17 @@ public class MainActivity extends Activity {
             name.setTypeface(isCur ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
             r.setBackground(round(isCur ? HILITE : CARD, 12));
             Uri u = Library.uris.get(i);
-            if (Library.isDrive(u)) badge.setText(Drive.isSaved(MainActivity.this, Library.driveId(u)) ? "✓" : "☁️");
-            else badge.setText("");
+            badge.setTag(i);
+            if (Library.isDrive(u)) {
+                String id = Library.driveId(u);
+                Integer pct = Drive.progress.get(id);
+                if (Drive.isSaved(MainActivity.this, id)) { badge.setText("✓"); badge.setBackground(null); }
+                else if (pct != null) { badge.setText(pct + "%"); badge.setBackground(null); }
+                else { badge.setText("⬇"); badge.setBackground(round(HILITE, 10)); }
+                badge.setVisibility(View.VISIBLE);
+            } else {
+                badge.setVisibility(View.GONE);
+            }
             return r;
         }
     }
@@ -548,6 +579,8 @@ public class MainActivity extends Activity {
     private void showList() {
         adapter.notifyDataSetChanged();
         listHeader.setText("បញ្ជីវគ្គ (" + Library.names.size() + ")");
+        dlAllBtn.setVisibility(isDriveSource() && !Library.names.isEmpty() ? View.VISIBLE : View.GONE);
+        rebuildChips();
         int last = Library.prefs(this).getInt(Library.KEY_INDEX, -1);
         if (last >= 0 && last < Library.names.size()) {
             title.setText(Library.names.get(last));
@@ -564,6 +597,98 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------ sources
+
+    private boolean isDriveSource() {
+        return "drive".equals(Library.prefs(this).getString(Library.KEY_SOURCE, "local"));
+    }
+
+    /** Playlist buttons, one per Drive folder. */
+    private void rebuildChips() {
+        chips.removeAllViews();
+        java.util.List<String> names = Library.playlistNames(this);
+        boolean show = isDriveSource() && names.size() > 1 && settingsPanel.getVisibility() != View.VISIBLE;
+        chipsScroll.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) return;
+        int sel = Library.selectedPlaylist(this);
+        for (int i = 0; i < names.size(); i++) {
+            final int idx = i;
+            boolean on = i == sel;
+            Button b = pillButton("📂 " + names.get(i) + "  (" + Library.playlistSize(this, i) + ")",
+                    on ? BROWN : HILITE, on ? Color.WHITE : BROWN);
+            b.setTextSize(14);
+            b.setOnClickListener(v -> {
+                if (idx == Library.selectedPlaylist(this)) return;
+                stopPlayer();
+                Library.selectPlaylist(this, idx);
+                lastListIndex = -2;
+                showList();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(40));
+            lp.rightMargin = dp(8);
+            chips.addView(b, lp);
+        }
+    }
+
+    private void startDownloads(java.util.ArrayList<String> ids) {
+        if (ids.isEmpty()) return;
+        for (String id : ids) if (!Drive.progress.containsKey(id)) Drive.progress.put(id, 0);
+        startForegroundService(new Intent(this, UpdateService.class)
+                .setAction(UpdateService.ACTION_DOWNLOAD)
+                .putStringArrayListExtra(UpdateService.EXTRA_IDS, ids));
+        adapter.notifyDataSetChanged();
+    }
+
+    /** ⬇ = download this lesson, ✓ = offer to delete the saved copy. */
+    private void onBadge(int i) {
+        if (i < 0 || i >= Library.uris.size()) return;
+        Uri u = Library.uris.get(i);
+        if (!Library.isDrive(u)) return;
+        String id = Library.driveId(u);
+        if (Drive.isSaved(this, id)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("លុប File ដែលបានទាញយក?")
+                    .setMessage(Library.names.get(i) + "\n\nវានឹងចាក់អនឡាញវិញ។")
+                    .setPositiveButton("លុប", (d, w) -> {
+                        PlayerService ps = PlayerService.instance;
+                        if (ps != null && ps.index() == i && (ps.isPlaying() || ps.isInSilence())) {
+                            Toast.makeText(this, "កំពុងចាក់ File នេះ — សូមផ្អាកសិន", Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        Drive.deleteSaved(this, id);
+                        adapter.notifyDataSetChanged();
+                        updateSettingsText();
+                    })
+                    .setNegativeButton("បោះបង់", null)
+                    .show();
+        } else if (!Drive.progress.containsKey(id)) {
+            java.util.ArrayList<String> one = new java.util.ArrayList<>();
+            one.add(id);
+            startDownloads(one);
+            Toast.makeText(this, "កំពុងទាញយក…", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void confirmDownloadAll() {
+        java.util.ArrayList<String> ids = new java.util.ArrayList<>();
+        for (Uri u : Library.uris) {
+            if (Library.isDrive(u)) {
+                String id = Library.driveId(u);
+                if (!Drive.isSaved(this, id) && !Drive.progress.containsKey(id)) ids.add(id);
+            }
+        }
+        if (ids.isEmpty()) {
+            Toast.makeText(this, "បានទាញយកទាំងអស់រួចហើយ", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("ទាញយក " + ids.size() + " File?")
+                .setMessage("File នីមួយៗអាចធំប្រហែល 100 MB។ ប្រសិនបើប្រើ Data ទូរស័ព្ទ វាអាចអស់ Data ច្រើន។"
+                        + (Updater.onWifi(this) ? "" : "\n\n⚠️ ឥឡូវមិនមែន Wi-Fi ទេ។"))
+                .setPositiveButton("ទាញយក", (d, w) -> startDownloads(ids))
+                .setNegativeButton("បោះបង់", null)
+                .show();
+    }
 
     private void stopPlayer() {
         if (PlayerService.instance != null) {
@@ -634,19 +759,24 @@ public class MainActivity extends Activity {
         statusPill.setText("☁️ កំពុងអាន Folder…");
         new Thread(() -> {
             try {
-                Drive.Listing l = Drive.list(id);
+                java.util.List<Drive.Playlist> lists = Drive.scanTree(id);
+                int files = 0;
+                for (Drive.Playlist p : lists) files += p.ids.size();
+                final int nFiles = files;
                 runOnUiThread(() -> {
-                    if (l.ids.isEmpty()) {
+                    if (lists.isEmpty()) {
                         statusPill.setText("រកមិនឃើញ MP3");
                         Toast.makeText(this, "រកមិនឃើញ MP3 ក្នុង Folder នេះទេ", Toast.LENGTH_LONG).show();
                         return;
                     }
                     stopPlayer();
-                    Library.saveDrive(this, link.trim(), l);
+                    String old = Library.prefs(this).getString(Library.KEY_DRIVE_LINK, "");
+                    boolean newLink = !link.trim().equals(old) || !isDriveSource();
+                    Library.saveDriveTree(this, link.trim(), lists, newLink);
                     Library.loadDrive(this);
-                    showList();
                     showSettings(false);
-                    Toast.makeText(this, l.ids.size() + " File ពី Google Drive", Toast.LENGTH_SHORT).show();
+                    showList();
+                    Toast.makeText(this, lists.size() + " Playlist • " + nFiles + " File", Toast.LENGTH_SHORT).show();
                 });
             } catch (Exception ex) {
                 runOnUiThread(() -> {
@@ -777,12 +907,14 @@ public class MainActivity extends Activity {
             statusPill.setText("☁️ កំពុងទាញយក " + ps.downloadPercent() + "%");
         } else if (ps.lastError() != null) {
             statusPill.setText("⚠️ " + ps.lastError());
+        } else if (ps.isLoading()) {
+            statusPill.setText("☁️ កំពុងផ្ទុកពីអនឡាញ…");
         } else if (ps.isInSilence()) {
             statusPill.setText("🔇 ស្ងាត់ — នៅសល់ " + Library.time(ps.silenceRemaining()));
         } else if (playing && ps.cycleEnabled()) {
-            statusPill.setText("🔊 កំពុងចាក់ — ស្ងាត់ក្នុង " + Library.time(ps.talkRemaining()));
+            statusPill.setText("🔊 កំពុងចាក់" + (ps.isStreaming() ? " (អនឡាញ)" : "") + " — ស្ងាត់ក្នុង " + Library.time(ps.talkRemaining()));
         } else if (playing) {
-            statusPill.setText("🔊 កំពុងចាក់");
+            statusPill.setText("🔊 កំពុងចាក់" + (ps.isStreaming() ? " (អនឡាញ)" : ""));
         } else {
             statusPill.setText("⏸ ផ្អាក");
         }

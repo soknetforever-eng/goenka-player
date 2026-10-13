@@ -30,6 +30,11 @@ public class UpdateService extends Service {
 
     public static final String ACTION_NIGHTLY = "nightly";
     public static final String ACTION_MANUAL = "manual";
+    public static final String ACTION_DOWNLOAD = "download";
+    public static final String EXTRA_IDS = "ids";
+
+    private static final java.util.ArrayList<String> queue = new java.util.ArrayList<>();
+    private static volatile boolean downloadingNow;
 
     private static final String CHANNEL = "updates";
     private static final int NOTIF_WORK = 2;
@@ -71,6 +76,32 @@ public class UpdateService extends Service {
         if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIF_WORK, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         else startForeground(NOTIF_WORK, n);
 
+        if (intent != null && ACTION_DOWNLOAD.equals(intent.getAction())) {
+            java.util.ArrayList<String> ids = intent.getStringArrayListExtra(EXTRA_IDS);
+            synchronized (queue) { if (ids != null) queue.addAll(ids); }
+            if (!downloadingNow) {
+                downloadingNow = true;
+                new Thread(() -> {
+                    PowerManager.WakeLock dl = ((PowerManager) getSystemService(POWER_SERVICE))
+                            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GoenkaPlayer:download");
+                    dl.acquire(3 * 60 * 60 * 1000L);
+                    while (true) {
+                        java.util.ArrayList<String> batch;
+                        synchronized (queue) {
+                            if (queue.isEmpty()) break;
+                            batch = new java.util.ArrayList<>(queue);
+                            queue.clear();
+                        }
+                        downloadChosen(batch);
+                    }
+                    if (dl.isHeld()) dl.release();
+                    downloadingNow = false;
+                    progress = "";
+                    if (!running) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); }
+                }).start();
+            }
+            return START_NOT_STICKY;
+        }
         if (running) return START_NOT_STICKY;
         running = true;
         final boolean manual = intent != null && ACTION_MANUAL.equals(intent.getAction());
@@ -101,8 +132,7 @@ public class UpdateService extends Service {
             running = false;
             if (wl.isHeld()) wl.release();
             Updater.schedule(this);
-            stopForeground(STOP_FOREGROUND_REMOVE);
-            stopSelf();
+            if (!downloadingNow) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); }
         }).start();
         return START_NOT_STICKY;
     }
@@ -116,34 +146,38 @@ public class UpdateService extends Service {
         if (id == null) return "";
 
         show("កំពុងឆែក Folder Google Drive…");
-        Drive.Listing l = Drive.list(id);
         int before = Library.driveCount(this);
-        Library.saveDriveListOnly(this, l);
-        int added = Math.max(0, l.ids.size() - before);
+        java.util.List<Drive.Playlist> lists = Drive.scanTree(id);
+        if (lists.isEmpty()) return "Drive: រកមិនឃើញ MP3";
+        Library.saveDriveTree(this, link, lists, false);
+        int total = Library.driveCount(this);
 
         PlayerService ps = PlayerService.instance;
-        boolean busy = ps != null && (ps.isPlaying() || ps.isInSilence() || ps.isDownloading());
+        boolean busy = ps != null && (ps.isPlaying() || ps.isInSilence() || ps.isLoading());
         if (!busy) Library.loadDrive(this);   // otherwise the new list is used next time
 
-        // download files that are not saved yet (nightly: only on Wi-Fi)
-        if (!manual && !Updater.onWifi(this)) {
-            return "Drive: " + l.ids.size() + " File (File ថ្មី " + added + ") — រង់ចាំ Wi-Fi ដើម្បីទាញយក";
-        }
-        int got = 0, failed = 0, total = l.ids.size();
-        for (int i = 0; i < total; i++) {
-            String fid = l.ids.get(i);
+        // Only the lists are refreshed. Nothing is downloaded automatically.
+        int added = Math.max(0, total - before);
+        return "Drive: " + lists.size() + " Playlist • " + total + " File" + (added > 0 ? " (ថ្មី " + added + ")" : "");
+    }
+
+    /** Downloads the Drive files the user chose (⬇ buttons). */
+    private void downloadChosen(java.util.ArrayList<String> ids) {
+        int n = 0, total = ids.size(), failed = 0;
+        for (String fid : ids) {
+            n++;
             if (Drive.isSaved(this, fid)) continue;
-            final int n = i + 1;
+            final int k = n;
             try {
-                show("ទាញយក " + n + "/" + total + "…");
-                Drive.download(this, fid, pct -> show("ទាញយក " + n + "/" + total + " — " + pct + "%"));
-                got++;
+                show("ទាញយក " + k + "/" + total + "…");
+                Drive.download(this, fid, pct -> show("ទាញយក " + k + "/" + total + " — " + pct + "%"));
             } catch (Exception e) {
                 failed++;
             }
         }
-        return "Drive: " + total + " File • File ថ្មី " + added + " • បានទាញយក " + got
-                + (failed > 0 ? " • បរាជ័យ " + failed : "");
+        String when = new SimpleDateFormat("dd/MM HH:mm", Locale.US).format(new Date());
+        getSystemService(NotificationManager.class).notify(4, note(
+                failed == 0 ? "ទាញយករួចរាល់ (" + total + " File)" : "ទាញយកបរាជ័យ " + failed + " File", false));
     }
 
     // ---------------- App update ----------------

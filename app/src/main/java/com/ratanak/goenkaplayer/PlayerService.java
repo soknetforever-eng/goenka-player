@@ -114,7 +114,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
                     inSilence = false;
                 }
 
-                boolean active = isPlaying() || inSilence || downloading;
+                boolean active = isPlaying() || inSilence || downloading || isLoading();
                 if (active) holdWake(); else releaseWake();
                 if (inSilence) startKeepAlive(); else stopKeepAlive();
                 if (++tick % 5 == 0) savePosition();
@@ -169,7 +169,18 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         updateNotification();
     }
 
+    private android.net.wifi.WifiManager.WifiLock wifiLock;
+
     private void holdWake() {
+        try {
+            if (wifiLock == null) {
+                android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                        getApplicationContext().getSystemService(WIFI_SERVICE);
+                wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "GoenkaPlayer:wifi");
+                wifiLock.setReferenceCounted(false);
+            }
+            if (!wifiLock.isHeld()) wifiLock.acquire();
+        } catch (Exception ignored) {}
         if (wakeLock == null) {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GoenkaPlayer:cycle");
@@ -179,6 +190,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     }
 
     private void releaseWake() {
+        try { if (wifiLock != null && wifiLock.isHeld()) wifiLock.release(); } catch (Exception ignored) {}
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
     }
 
@@ -310,13 +322,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         downloading = false;
         lastError = null;
         Library.prefs(this).edit().putInt(Library.KEY_INDEX, i).putLong(Library.KEY_POS, startMs).apply();
-        Uri u = Library.uris.get(i);
-        if (Library.isDrive(u) && !Drive.isSaved(this, Library.driveId(u))) {
-            beginDownload(i, startMs);   // Google Drive file not saved yet: download first
-            updateNotification();
-            return;
-        }
-        prepareCurrent(i, startMs);
+        prepareCurrent(i, startMs);   // Drive files that are not saved are played online
     }
 
     // ---------- Google Drive downloads ----------
@@ -326,6 +332,14 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     private volatile String lastError;
 
     public boolean isDownloading() { return downloading; }
+
+    // online (streaming) state
+    private volatile boolean preparing, buffering;
+    public boolean isLoading() { return (preparing || buffering) && mp != null; }
+    public boolean isStreaming() {
+        return index >= 0 && index < Library.uris.size() && Library.isDrive(Library.uris.get(index))
+                && !Drive.isSaved(this, Library.driveId(Library.uris.get(index)));
+    }
     public int downloadPercent() { return downloadPct; }
     public String lastError() { return lastError; }
 
@@ -382,9 +396,14 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         mp.setOnPreparedListener(p -> {
             prepared = true;
             if (seek > 0 && seek < p.getDuration()) p.seekTo((int) seek);
+            preparing = false;
             if (requestFocus()) p.start();
             updateNotification();
-            prefetchNext(index);
+        });
+        mp.setOnInfoListener((p, what, extra) -> {
+            if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) buffering = true;
+            else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) buffering = false;
+            return false;
         });
         mp.setOnCompletionListener(p -> {
             if (index + 1 < Library.uris.size()) {
@@ -398,13 +417,28 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         });
         mp.setOnErrorListener((p, what, extra) -> {
             prepared = false;
+            preparing = false;
+            buffering = false;
+            lastError = isStreaming() ? "ចាក់អនឡាញមិនបាន — សូមពិនិត្យ Internet ឬ Share" : "ចាក់ File នេះមិនបាន";
             updateNotification();
             return true;
         });
         try {
             Uri src = Library.uris.get(i);
-            if (Library.isDrive(src)) mp.setDataSource(Drive.localFile(this, Library.driveId(src)).getPath());
-            else mp.setDataSource(this, src);
+            preparing = true;
+            buffering = false;
+            if (Library.isDrive(src)) {
+                String id = Library.driveId(src);
+                if (Drive.isSaved(this, id)) {
+                    mp.setDataSource(Drive.localFile(this, id).getPath());
+                } else {
+                    java.util.Map<String, String> h = new java.util.HashMap<>();
+                    h.put("User-Agent", "Mozilla/5.0 (Linux; Android) GoenkaPlayer");
+                    mp.setDataSource(this, Uri.parse(Drive.streamUrl(id)), h);
+                }
+            } else {
+                mp.setDataSource(this, src);
+            }
             mp.prepareAsync();
         } catch (Exception e) {
             releasePlayer();
@@ -560,7 +594,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         Notification.Builder b = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle(title)
-                .setContentText(downloading ? "កំពុងទាញយកពី Google Drive… " + downloadPct + "%" : inSilence ? "ស្ងាត់ " + Library.silenceMinutes(this) + " នាទី (ចុច ▶ ដើម្បីរំលង)" : (playing ? "កំពុងលេង" : "ផ្អាក"))
+                .setContentText(isLoading() ? "☁️ កំពុងផ្ទុកពីអនឡាញ…" : inSilence ? "ស្ងាត់ " + Library.silenceMinutes(this) + " នាទី (ចុច ▶ ដើម្បីរំលង)" : (playing ? "កំពុងលេង" : "ផ្អាក"))
                 .setContentIntent(content)
                 .setOngoing(true)
                 .setShowWhen(false)

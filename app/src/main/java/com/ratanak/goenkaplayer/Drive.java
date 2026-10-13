@@ -40,6 +40,62 @@ public final class Drive {
     public static final class Listing {
         public final List<String> names = new ArrayList<>();
         public final List<String> ids = new ArrayList<>();
+        public final List<String> folderNames = new ArrayList<>();
+        public final List<String> folderIds = new ArrayList<>();
+    }
+
+    /** One playlist = the audio files of one Drive folder. */
+    public static final class Playlist {
+        public String name;
+        public String id;
+        public final List<String> names = new ArrayList<>();
+        public final List<String> ids = new ArrayList<>();
+    }
+
+    /**
+     * Reads a parent folder: its own MP3s become one playlist, and every sub-folder
+     * (up to 3 levels deep) becomes its own playlist. Must run off the main thread.
+     */
+    public static List<Playlist> scanTree(String rootId) throws Exception {
+        List<Playlist> out = new ArrayList<>();
+        scan(rootId, "", 0, out, true);
+        return out;
+    }
+
+    private static void scan(String id, String path, int depth, List<Playlist> out, boolean root) throws Exception {
+        Listing l = list(id);
+        if (!l.ids.isEmpty()) {
+            Playlist p = new Playlist();
+            p.name = root ? "Folder មេ" : path;
+            p.id = id;
+            p.names.addAll(l.names);
+            p.ids.addAll(l.ids);
+            out.add(p);
+        }
+        if (depth >= 3) return;
+        for (int i = 0; i < l.folderIds.size(); i++) {
+            String sub = l.folderNames.get(i);
+            try {
+                scan(l.folderIds.get(i), root ? sub : path + " / " + sub, depth + 1, out, false);
+            } catch (Exception ignored) {
+                // a sub-folder that cannot be read is skipped
+            }
+        }
+    }
+
+    /** Address used to play a Drive file online (no download). */
+    public static String streamUrl(String id) {
+        return "https://drive.usercontent.google.com/download?id=" + id + "&export=download&confirm=t";
+    }
+
+    // ---------------- download progress (for the list badges) ----------------
+
+    public static final java.util.Map<String, Integer> progress =
+            java.util.Collections.synchronizedMap(new java.util.HashMap<>());
+
+    public static void deleteSaved(Context c, String id) {
+        File f = localFile(c, id);
+        if (f.exists()) f.delete();
     }
 
     private static HttpURLConnection open(String url) throws Exception {
@@ -81,7 +137,13 @@ public final class Drive {
             String id = m.group(1);
             String block = m.group(2);
             String name = unescape(m.group(3));
-            if (block.contains("/folders/")) continue;          // sub-folder, skip
+            if (block.contains("/folders/")) {                 // sub-folder
+                if (seen.add(id)) {
+                    out.folderNames.add(name);
+                    out.folderIds.add(id);
+                }
+                continue;
+            }
             String lower = name.toLowerCase();
             boolean audio = lower.endsWith(".mp3") || lower.endsWith(".m4a")
                     || lower.endsWith(".wav") || lower.endsWith(".ogg") || lower.endsWith(".aac");
@@ -90,7 +152,7 @@ public final class Drive {
                 out.ids.add(id);
             }
         }
-        if (out.ids.isEmpty() && !html.contains("flip-entry")) {
+        if (out.ids.isEmpty() && out.folderIds.isEmpty() && !html.contains("flip-entry")) {
             throw new Exception("not-shared");
         }
         return out;
@@ -130,6 +192,9 @@ public final class Drive {
         }
         File part = new File(dest.getPath() + ".part");
         try {
+            if (p == null) p = pct -> progress.put(id, pct);
+            else { Progress outer = p; p = pct -> { progress.put(id, pct); outer.onProgress(pct); }; }
+            progress.put(id, 0);
             HttpURLConnection conn = open("https://drive.usercontent.google.com/download?id=" + id
                     + "&export=download&confirm=t");
             int code = conn.getResponseCode();
@@ -156,6 +221,7 @@ public final class Drive {
             return dest;
         } finally {
             if (part.exists()) part.delete();
+            progress.remove(id);
             synchronized (running) {
                 running.remove(id);
                 running.notifyAll();
