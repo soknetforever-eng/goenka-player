@@ -29,5 +29,6 @@ public class UpdateReceiver extends BroadcastReceiver {
             SelfInstaller.post(c, "Goenka Player", "✅ បាន Update ទៅ v" + Updater.currentVersionName(c) + " ហើយ", open);
         }
         Updater.schedule(c);   // always arm the next 2:00 AM
+        Schedules.arm(c);      // and the next timed play
     }
 }

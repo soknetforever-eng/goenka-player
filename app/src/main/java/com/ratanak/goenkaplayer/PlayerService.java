@@ -56,14 +56,23 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
     private PowerManager.WakeLock wakeLock;
 
     // ---- 10-10 mode: the app itself pauses for 10 min after every 10 min of talk ----
-    public long talkMs() { return Library.talkMinutes(this) * 60 * 1000L; }
-    public long silenceMs() { return Library.silenceMinutes(this) * 60 * 1000L; }
+    public long talkMs() {
+        if (Schedules.overrideOn(this))
+            return Math.max(1, Library.prefs(this).getInt(Schedules.KEY_OVR_TALK, 10)) * 60 * 1000L;
+        return Library.talkMinutes(this) * 60 * 1000L;
+    }
+    public long silenceMs() {
+        if (Schedules.overrideOn(this))
+            return Math.max(1, Library.prefs(this).getInt(Schedules.KEY_OVR_SIL, 10)) * 60 * 1000L;
+        return Library.silenceMinutes(this) * 60 * 1000L;
+    }
     private long talkedMs;          // talk played since the last silence
     private long lastPos = -1;
     private boolean inSilence;
     private long silenceEndsAt;     // SystemClock.elapsedRealtime()
 
     public boolean cycleEnabled() {
+        if (Schedules.overrideOn(this)) return Library.prefs(this).getBoolean(Schedules.KEY_OVR_CYCLE, true);
         return Library.prefs(this).getBoolean(Library.KEY_CYCLE, true);
     }
 
@@ -274,6 +283,8 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         if (action == null) action = "";
         switch (action) {
             case ACTION_PLAY_INDEX:
+                // a lesson picked by hand ends any running schedule (back to normal settings)
+                if (!intent.getBooleanExtra(Schedules.EXTRA_FROM_SCHEDULE, false)) Schedules.clearActive(this);
                 playIndex(intent.getIntExtra(EXTRA_INDEX, 0), intent.getLongExtra(EXTRA_POS, 0));
                 break;
             case ACTION_TOGGLE:
@@ -297,6 +308,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
                 }
                 break;
             case ACTION_STOP:
+                Schedules.clearActive(this);
                 stopAll();
                 return START_NOT_STICKY;
             default:

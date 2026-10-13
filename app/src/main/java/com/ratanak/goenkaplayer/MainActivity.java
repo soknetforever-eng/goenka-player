@@ -80,6 +80,7 @@ public class MainActivity extends Activity {
         }
 
         Updater.schedule(this);
+        Schedules.arm(this);
         boolean loaded = Library.ensureLoaded(this);
         showList();
         showSettings(!loaded);
@@ -362,6 +363,25 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lsp.topMargin = dp(8);
         set.addView(loopSwitch, lsp);
+
+        // ---- schedules ----
+        View lineS = new View(this);
+        lineS.setBackgroundColor(Color.rgb(0xEE, 0xE4, 0xD6));
+        LinearLayout.LayoutParams lls = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        lls.setMargins(0, dp(12), 0, dp(10));
+        set.addView(lineS, lls);
+        set.addView(text("⏰ កាលវិភាគ (ចាក់តាមម៉ោង)", 15, BROWN, true));
+        TextView schedHint = text("គ្មានកាលវិភាគ = ចាក់ធម្មតារហូតដល់អ្នកបញ្ឈប់", 13, MUTED, false);
+        set.addView(schedHint);
+        schedBox = new LinearLayout(this);
+        schedBox.setOrientation(LinearLayout.VERTICAL);
+        set.addView(schedBox);
+        Button addSched = pillButton("＋  បន្ថែមកាលវិភាគ", BROWN, Color.WHITE);
+        addSched.setOnClickListener(v -> editSchedule(null));
+        LinearLayout.LayoutParams asb = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+        asb.topMargin = dp(8);
+        set.addView(addSched, asb);
+        rebuildSchedules();
 
         // ---- updates ----
         View line2 = new View(this);
@@ -753,6 +773,209 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ------------------------------------------------------------------ schedules
+
+    private LinearLayout schedBox;
+
+    private void rebuildSchedules() {
+        if (schedBox == null) return;
+        schedBox.removeAllViews();
+        String active = Schedules.activeId(this);
+        for (Schedules.Item it : Schedules.all(this)) {
+            LinearLayout r = row();
+            r.setBackground(round(Color.rgb(0xF7, 0xF0, 0xE6), 12));
+            r.setPadding(dp(12), dp(8), dp(6), dp(8));
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            TextView t1 = text((it.id.equals(active) ? "▶ " : "") + it.timeText() + "   •   " + it.daysText(), 15, TEXT, true);
+            String cyc = it.cycle ? "ចាក់ " + it.talk + " / ស្ងាត់ " + it.sil + " នាទី" : "ចាក់ជាប់ (គ្មានស្ងាត់)";
+            TextView t2 = text("🎵 " + (it.fileName.isEmpty() ? "?" : it.fileName) + "\n" + cyc, 13, MUTED, false);
+            col.addView(t1);
+            col.addView(t2);
+            r.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            Switch sw = new Switch(this);
+            sw.setChecked(it.on);
+            sw.setOnCheckedChangeListener((b, on) -> {
+                it.on = on;
+                Schedules.put(this, it);
+            });
+            r.addView(sw);
+            r.setOnClickListener(v -> editSchedule(it));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(8);
+            schedBox.addView(r, lp);
+        }
+    }
+
+    private void editSchedule(Schedules.Item existing) {
+        if (Library.uris.isEmpty()) {
+            Toast.makeText(this, "សូមជ្រើស Folder ឬ Drive ដែលមាន MP3 សិន", Toast.LENGTH_LONG).show();
+            return;
+        }
+        final Schedules.Item it = existing != null ? existing : new Schedules.Item();
+        if (existing == null) {
+            it.cycle = Library.prefs(this).getBoolean(Library.KEY_CYCLE, true);
+            it.talk = Library.talkMinutes(this);
+            it.sil = Library.silenceMinutes(this);
+            int cur = Math.max(0, Math.min(Library.prefs(this).getInt(Library.KEY_INDEX, 0), Library.uris.size() - 1));
+            pickFileInto(it, cur);
+        }
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+
+        // start / end
+        Button startBtn = pillButton("", BROWN_DARK, Color.WHITE);
+        Button endBtn = pillButton("", BROWN_DARK, Color.WHITE);
+        Switch forever = new Switch(this);
+        Runnable showTimes = () -> {
+            startBtn.setText("ចាប់ផ្ដើម  " + Schedules.hhmm(it.start));
+            endBtn.setText(it.end < 0 ? "បិទ  —" : "បិទ  " + Schedules.hhmm(it.end));
+            endBtn.setEnabled(it.end >= 0);
+            endBtn.setAlpha(it.end >= 0 ? 1f : 0.4f);
+        };
+        startBtn.setOnClickListener(v -> new android.app.TimePickerDialog(this, (tp, h, m) -> {
+            it.start = h * 60 + m;
+            showTimes.run();
+        }, it.start / 60, it.start % 60, true).show());
+        endBtn.setOnClickListener(v -> {
+            int e = it.end < 0 ? (it.start + 60) % 1440 : it.end;
+            new android.app.TimePickerDialog(this, (tp, h, m) -> {
+                it.end = h * 60 + m;
+                showTimes.run();
+            }, e / 60, e % 60, true).show();
+        });
+        LinearLayout times = row();
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        half.rightMargin = dp(6);
+        times.addView(startBtn, half);
+        times.addView(endBtn, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        box.addView(times);
+
+        forever.setText("♾  ចាក់រហូត (គ្មានម៉ោងបិទ)");
+        forever.setTextColor(TEXT);
+        forever.setChecked(it.end < 0);
+        forever.setOnCheckedChangeListener((b, on) -> {
+            it.end = on ? -1 : (it.start + 60) % 1440;
+            showTimes.run();
+        });
+        box.addView(forever);
+        showTimes.run();
+
+        // days
+        box.addView(text("ថ្ងៃ:", 14, MUTED, false));
+        LinearLayout daysRow = row();
+        for (int d = 0; d < 7; d++) {
+            final int bit = d;
+            Button db = new Button(this);
+            db.setAllCaps(false);
+            db.setTextSize(13);
+            db.setMinWidth(0);
+            db.setMinHeight(0);
+            db.setPadding(0, 0, 0, 0);
+            db.setStateListAnimator(null);
+            db.setText(Schedules.DAY_SHORT[d]);
+            Runnable paint = () -> {
+                boolean on = (it.days & (1 << bit)) != 0;
+                db.setBackground(circle(on ? BROWN : Color.rgb(0xE8, 0xDF, 0xD2)));
+                db.setTextColor(on ? Color.WHITE : TEXT);
+            };
+            paint.run();
+            db.setOnClickListener(v -> {
+                it.days ^= (1 << bit);
+                paint.run();
+            });
+            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(dp(38), dp(38));
+            dl.rightMargin = dp(4);
+            daysRow.addView(db, dl);
+        }
+        box.addView(daysRow);
+
+        // file
+        box.addView(text("File ចាប់ផ្ដើម:", 14, MUTED, false));
+        Button fileBtn = pillButton("🎵 " + it.fileName, Color.rgb(0xF7, 0xF0, 0xE6), TEXT);
+        fileBtn.setTextSize(14);
+        fileBtn.setOnClickListener(v -> {
+            String[] items = Library.names.toArray(new String[0]);
+            new AlertDialog.Builder(this)
+                    .setTitle("ជ្រើស File (ពី " + (isDriveSource() ? "Playlist បច្ចុប្បន្ន" : "Folder") + ")")
+                    .setItems(items, (d, w) -> {
+                        pickFileInto(it, w);
+                        fileBtn.setText("🎵 " + it.fileName);
+                    })
+                    .show();
+        });
+        box.addView(fileBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        box.addView(text("ចប់ File នោះ វាចាក់ File បន្ទាប់បន្ត", 12, MUTED, false));
+
+        // talk / silence
+        Switch cyc = new Switch(this);
+        cyc.setText("🔇 ចាក់/ស្ងាត់");
+        cyc.setTextColor(TEXT);
+        cyc.setChecked(it.cycle);
+        box.addView(cyc);
+        LinearLayout mins = row();
+        EditText talkIn = new EditText(this);
+        talkIn.setInputType(InputType.TYPE_CLASS_NUMBER);
+        talkIn.setText(String.valueOf(it.talk));
+        EditText silIn = new EditText(this);
+        silIn.setInputType(InputType.TYPE_CLASS_NUMBER);
+        silIn.setText(String.valueOf(it.sil));
+        mins.addView(text("ចាក់ ", 14, TEXT, false));
+        mins.addView(talkIn, new LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT));
+        mins.addView(text(" ស្ងាត់ ", 14, TEXT, false));
+        mins.addView(silIn, new LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT));
+        mins.addView(text(" នាទី", 14, TEXT, false));
+        box.addView(mins);
+        cyc.setOnCheckedChangeListener((b, on) -> mins.setAlpha(on ? 1f : 0.4f));
+        mins.setAlpha(it.cycle ? 1f : 0.4f);
+
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(box);
+
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle(existing == null ? "⏰ កាលវិភាគថ្មី" : "⏰ កែកាលវិភាគ")
+                .setView(sv)
+                .setPositiveButton("រក្សាទុក", (d, w) -> {
+                    if (it.days == 0) {
+                        Toast.makeText(this, "សូមជ្រើសយ៉ាងហោចណាស់មួយថ្ងៃ", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    it.cycle = cyc.isChecked();
+                    try { it.talk = Math.max(1, Math.min(600, Integer.parseInt(talkIn.getText().toString().trim()))); } catch (Exception ignored) {}
+                    try { it.sil = Math.max(1, Math.min(600, Integer.parseInt(silIn.getText().toString().trim()))); } catch (Exception ignored) {}
+                    it.on = true;
+                    Schedules.put(this, it);
+                    rebuildSchedules();
+                    Toast.makeText(this, "✅ រក្សាទុក: " + it.timeText() + " • " + it.daysText(), Toast.LENGTH_LONG).show();
+                })
+                .setNegativeButton("បោះបង់", null);
+        if (existing != null) {
+            b.setNeutralButton("🗑 លុប", (d, w) -> {
+                Schedules.remove(this, it.id);
+                rebuildSchedules();
+            });
+        }
+        b.show();
+    }
+
+    private void pickFileInto(Schedules.Item it, int i) {
+        if (i < 0 || i >= Library.uris.size()) return;
+        it.file = Library.uris.get(i).toString();
+        it.fileName = Library.names.get(i);
+        if (isDriveSource()) {
+            it.source = "drive";
+            java.util.List<String> pl = Library.playlistNames(this);
+            int sel = Library.selectedPlaylist(this);
+            it.playlist = sel < pl.size() ? pl.get(sel) : "";
+        } else {
+            it.source = "local";
+            it.tree = Library.prefs(this).getString(Library.KEY_TREE, "");
+        }
+    }
+
     private void stopPlayer() {
         if (PlayerService.instance != null) {
             startService(new Intent(this, PlayerService.class).setAction(PlayerService.ACTION_STOP));
@@ -995,6 +1218,12 @@ public class MainActivity extends Activity {
         } else {
             statusPill.setText("⏸ ផ្អាក");
         }
+
+        if (Schedules.overrideOn(this)) {
+            Schedules.Item si = Schedules.active(this);
+            if (si != null) statusPill.setText("⏰ " + (si.end < 0 ? "" : "→" + Schedules.hhmm(si.end) + "  ") + statusPill.getText());
+        }
+        if (tickCount % 10 == 0) rebuildSchedules();
 
         long dur = ps.duration();
         long pos = ps.position();
