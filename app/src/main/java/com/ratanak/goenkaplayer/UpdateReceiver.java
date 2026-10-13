@@ -19,6 +19,15 @@ public class UpdateReceiver extends BroadcastReceiver {
             } catch (Exception ignored) {
             }
         }
+        if (Intent.ACTION_MY_PACKAGE_REPLACED.equals(a)) {
+            Library.prefs(c).edit().remove(Updater.KEY_PENDING_TAG).remove(Updater.KEY_PENDING_APK)
+                    .putString(Updater.KEY_LAST_MSG, "App: បាន Update ទៅ v" + Updater.currentVersionName(c) + " ហើយ")
+                    .apply();
+            ApkProvider.file(c).delete();
+            android.app.PendingIntent open = android.app.PendingIntent.getActivity(c, 43,
+                    new Intent(c, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE);
+            SelfInstaller.notify(c, "Goenka Player", "✅ បាន Update ទៅ v" + Updater.currentVersionName(c) + " ហើយ", open);
+        }
         Updater.schedule(c);   // always arm the next 2:00 AM
     }
 }

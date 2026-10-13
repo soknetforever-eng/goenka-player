@@ -219,6 +219,19 @@ public class UpdateService extends Service {
                 .putString(Updater.KEY_PENDING_APK, ApkProvider.uri().toString())
                 .apply();
 
+        // Install by itself (no "Install" tap on Android 12+), unless music is playing now
+        PlayerService ps = PlayerService.instance;
+        boolean busy = ps != null && (ps.isPlaying() || ps.isInSilence() || ps.isLoading());
+        if (!busy) {
+            try {
+                show("កំពុងដំឡើងកំណែថ្មី " + tag + "…");
+                SelfInstaller.install(this, out);
+                return "App: កំពុងដំឡើង " + tag + "…";
+            } catch (Exception ignored) {
+                // fall back to the tap-to-install notification below
+            }
+        }
+
         // notification: tap to install
         PendingIntent install = PendingIntent.getActivity(this, 31, ApkProvider.installIntent(),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);

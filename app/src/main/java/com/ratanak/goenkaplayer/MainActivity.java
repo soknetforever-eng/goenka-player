@@ -88,11 +88,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        SelfInstaller.uiVisible = true;
         handler.post(ticker);
     }
 
     @Override
     protected void onPause() {
+        SelfInstaller.uiVisible = false;
         handler.removeCallbacks(ticker);
         super.onPause();
     }
@@ -837,11 +839,17 @@ public class MainActivity extends Activity {
                     Uri.parse("package:" + getPackageName())));
             return;
         }
-        try {
-            startActivity(ApkProvider.installIntent());
-        } catch (Exception e) {
-            Toast.makeText(this, "បើកមិនបាន", Toast.LENGTH_SHORT).show();
-        }
+        Toast.makeText(this, "កំពុងដំឡើង… App នឹងបិទ ហើយបើកវិញដោយខ្លួនឯង", Toast.LENGTH_LONG).show();
+        new Thread(() -> {
+            try {
+                SelfInstaller.install(this, ApkProvider.file(this));
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    try { startActivity(ApkProvider.installIntent()); }
+                    catch (Exception e2) { Toast.makeText(this, "បើកមិនបាន", Toast.LENGTH_SHORT).show(); }
+                });
+            }
+        }).start();
     }
 
     private void refreshUpdateInfo() {
