@@ -54,12 +54,16 @@ public final class Schedules {
         public boolean cycle = true;
         public int talk = 10;
         public int sil = 10;
+        public boolean resume = true;     // next time, continue where it stopped
+        public String lastFile = "";
+        public long lastPos = 0;
 
         JSONObject toJson() throws Exception {
             JSONObject o = new JSONObject();
             o.put("id", id); o.put("on", on); o.put("s", start); o.put("e", end); o.put("d", days);
             o.put("src", source); o.put("pl", playlist); o.put("tr", tree); o.put("f", file);
             o.put("fn", fileName); o.put("cy", cycle); o.put("t", talk); o.put("si", sil);
+            o.put("rs", resume); o.put("lf", lastFile); o.put("lp", lastPos);
             return o;
         }
 
@@ -78,6 +82,9 @@ public final class Schedules {
             it.cycle = o.optBoolean("cy", true);
             it.talk = Math.max(1, o.optInt("t", 10));
             it.sil = Math.max(1, o.optInt("si", 10));
+            it.resume = o.optBoolean("rs", true);
+            it.lastFile = o.optString("lf", "");
+            it.lastPos = o.optLong("lp", 0);
             return it;
         }
 
@@ -233,8 +240,22 @@ public final class Schedules {
         }
         if (Library.uris.isEmpty()) return "បញ្ជីទទេ";
         int idx = 0;
-        for (int i = 0; i < Library.uris.size(); i++) {
-            if (Library.uris.get(i).toString().equals(it.file)) { idx = i; break; }
+        long pos = 0;
+        boolean found = false;
+        if (it.resume && !it.lastFile.isEmpty()) {
+            for (int i = 0; i < Library.uris.size(); i++) {
+                if (Library.uris.get(i).toString().equals(it.lastFile)) {
+                    idx = i;
+                    pos = Math.max(0, it.lastPos - 5000);   // replay the last 5 seconds
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            for (int i = 0; i < Library.uris.size(); i++) {
+                if (Library.uris.get(i).toString().equals(it.file)) { idx = i; break; }
+            }
         }
         Library.prefs(c).edit()
                 .putString(KEY_ACTIVE, it.id)
@@ -245,13 +266,32 @@ public final class Schedules {
         Intent i = new Intent(c, PlayerService.class)
                 .setAction(PlayerService.ACTION_PLAY_INDEX)
                 .putExtra(PlayerService.EXTRA_INDEX, idx)
-                .putExtra(PlayerService.EXTRA_POS, 0L)
+                .putExtra(PlayerService.EXTRA_POS, pos)
                 .putExtra(EXTRA_FROM_SCHEDULE, true);
         c.startForegroundService(i);
         return null;
     }
 
+    /** Remembers where the running schedule is now, so it can continue there next time. */
+    public static void saveProgress(Context c) {
+        try {
+            Item a = active(c);
+            PlayerService ps = PlayerService.instance;
+            if (a == null || !a.resume || ps == null) return;
+            int i = ps.index();
+            if (i < 0 || i >= Library.uris.size()) return;
+            a.lastFile = Library.uris.get(i).toString();
+            a.lastPos = Math.max(0, ps.position());
+            List<Item> list = all(c);
+            for (int k = 0; k < list.size(); k++) if (list.get(k).id.equals(a.id)) list.set(k, a);
+            JSONArray arr = new JSONArray();
+            for (Item x : list) arr.put(x.toJson());
+            Library.prefs(c).edit().putString(KEY_LIST, arr.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
     static void stop(Context c) {
+        saveProgress(c);
         clearActive(c);
         if (PlayerService.instance != null) {
             c.startService(new Intent(c, PlayerService.class).setAction(PlayerService.ACTION_STOP));

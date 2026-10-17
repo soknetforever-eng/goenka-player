@@ -284,7 +284,10 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
         switch (action) {
             case ACTION_PLAY_INDEX:
                 // a lesson picked by hand ends any running schedule (back to normal settings)
-                if (!intent.getBooleanExtra(Schedules.EXTRA_FROM_SCHEDULE, false)) Schedules.clearActive(this);
+                if (!intent.getBooleanExtra(Schedules.EXTRA_FROM_SCHEDULE, false)) {
+                    Schedules.saveProgress(this);
+                    Schedules.clearActive(this);
+                }
                 playIndex(intent.getIntExtra(EXTRA_INDEX, 0), intent.getLongExtra(EXTRA_POS, 0));
                 break;
             case ACTION_TOGGLE:
@@ -308,6 +311,7 @@ public class PlayerService extends Service implements AudioManager.OnAudioFocusC
                 }
                 break;
             case ACTION_STOP:
+                Schedules.saveProgress(this);
                 Schedules.clearActive(this);
                 stopAll();
                 return START_NOT_STICKY;

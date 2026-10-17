@@ -789,7 +789,8 @@ public class MainActivity extends Activity {
             col.setOrientation(LinearLayout.VERTICAL);
             TextView t1 = text((it.id.equals(active) ? "▶ " : "") + it.timeText() + "   •   " + it.daysText(), 15, TEXT, true);
             String cyc = it.cycle ? "ចាក់ " + it.talk + " / ស្ងាត់ " + it.sil + " នាទី" : "ចាក់ជាប់ (គ្មានស្ងាត់)";
-            TextView t2 = text("🎵 " + (it.fileName.isEmpty() ? "?" : it.fileName) + "\n" + cyc, 13, MUTED, false);
+            String rs = it.resume ? (it.lastFile.isEmpty() ? "  •  ⏯ បន្ត" : "  •  ⏯ បន្តពី " + Library.time(it.lastPos)) : "";
+            TextView t2 = text("🎵 " + (it.fileName.isEmpty() ? "?" : it.fileName) + "\n" + cyc + rs, 13, MUTED, false);
             col.addView(t1);
             col.addView(t2);
             r.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -903,12 +904,25 @@ public class MainActivity extends Activity {
                     .setTitle("ជ្រើស File (ពី " + (isDriveSource() ? "Playlist បច្ចុប្បន្ន" : "Folder") + ")")
                     .setItems(items, (d, w) -> {
                         pickFileInto(it, w);
+                        it.lastFile = "";
+                        it.lastPos = 0;
                         fileBtn.setText("🎵 " + it.fileName);
                     })
                     .show();
         });
         box.addView(fileBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
         box.addView(text("ចប់ File នោះ វាចាក់ File បន្ទាប់បន្ត", 12, MUTED, false));
+        Switch resumeSw = new Switch(this);
+        resumeSw.setText("⏯ ចាក់បន្តពីនាទីដែលបានឈប់លើកមុន");
+        resumeSw.setTextColor(TEXT);
+        resumeSw.setChecked(it.resume);
+        box.addView(resumeSw);
+        if (it.resume && !it.lastFile.isEmpty()) {
+            String where = it.fileName;
+            for (int k = 0; k < Library.uris.size(); k++)
+                if (Library.uris.get(k).toString().equals(it.lastFile)) where = Library.names.get(k);
+            box.addView(text("   លើកក្រោយបន្តពី: " + where + " • " + Library.time(it.lastPos), 12, MUTED, false));
+        }
 
         // talk / silence
         Switch cyc = new Switch(this);
@@ -940,6 +954,7 @@ public class MainActivity extends Activity {
                 .setView(sv)
                 .setPositiveButton("រក្សាទុក", (d, w) -> {
                     it.cycle = cyc.isChecked();
+                    it.resume = resumeSw.isChecked();
                     try { it.talk = Math.max(1, Math.min(600, Integer.parseInt(talkIn.getText().toString().trim()))); } catch (Exception ignored) {}
                     try { it.sil = Math.max(1, Math.min(600, Integer.parseInt(silIn.getText().toString().trim()))); } catch (Exception ignored) {}
                     it.on = true;
