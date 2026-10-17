@@ -189,61 +189,25 @@ public class UpdateService extends Service {
         if (found == null) return "App: ថ្មីបំផុតហើយ (v" + cur + ")";
 
         String tag = found[0];
-        File out = ApkProvider.file(this);
-        File part = new File(out.getPath() + ".part");
-        HttpURLConnection c = (HttpURLConnection) new URL(found[1]).openConnection();
-        c.setInstanceFollowRedirects(true);
-        c.setRequestProperty("User-Agent", "GoenkaPlayer");
-        c.setConnectTimeout(20000);
-        c.setReadTimeout(60000);
-        // GitHub sends the file from another address; follow up to 5 hops by hand
-        for (int hop = 0; hop < 5; hop++) {
-            int code = c.getResponseCode();
-            if (code / 100 != 3) break;
-            String loc = c.getHeaderField("Location");
-            c.disconnect();
-            c = (HttpURLConnection) new URL(loc).openConnection();
-            c.setRequestProperty("User-Agent", "GoenkaPlayer");
-        }
-        if (c.getResponseCode() != 200) throw new Exception("HTTP " + c.getResponseCode());
-        try (InputStream in = c.getInputStream(); OutputStream o = new FileOutputStream(part)) {
-            byte[] b = new byte[65536];
-            int n;
-            while ((n = in.read(b)) > 0) o.write(b, 0, n);
-        }
-        if (out.exists()) out.delete();
-        if (!part.renameTo(out)) throw new Exception("save");
-
+        String url = found[1];
         Library.prefs(this).edit()
                 .putString(Updater.KEY_PENDING_TAG, tag)
-                .putString(Updater.KEY_PENDING_APK, ApkProvider.uri().toString())
+                .putString(Updater.KEY_PENDING_APK, url)
                 .apply();
 
-        // Install by itself (no "Install" tap on Android 12+), unless music is playing now
-        PlayerService ps = PlayerService.instance;
-        boolean busy = ps != null && (ps.isPlaying() || ps.isInSilence() || ps.isLoading());
-        if (!busy) {
-            try {
-                show("កំពុងដំឡើងកំណែថ្មី " + tag + "…");
-                SelfInstaller.install(this, out);
-                return "App: កំពុងដំឡើង " + tag + "…";
-            } catch (Exception ignored) {
-                // fall back to the tap-to-install notification below
-            }
-        }
-
-        // notification: tap to install
-        PendingIntent install = PendingIntent.getActivity(this, 31, ApkProvider.installIntent(),
+        // The app no longer downloads or installs APKs itself: tap opens the download in the browser.
+        PendingIntent open = PendingIntent.getActivity(this, 31,
+                new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification n = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle("Goenka Player កំណែថ្មី " + tag)
-                .setContentText("ចុចទីនេះដើម្បីដំឡើង")
-                .setContentIntent(install)
+                .setContentText("ចុចទីនេះដើម្បីទាញយក រួចបើក File ដើម្បីដំឡើង")
+                .setContentIntent(open)
                 .setAutoCancel(true)
                 .build();
         getSystemService(NotificationManager.class).notify(NOTIF_APP, n);
-        return "App: មានកំណែថ្មី " + tag + " — ចុចដើម្បីដំឡើង";
+        return "App: មានកំណែថ្មី " + tag + " — ចុចប៊ូតុងបៃតងដើម្បីទាញយក";
     }
 
     @Override

@@ -89,13 +89,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        SelfInstaller.uiVisible = true;
         handler.post(ticker);
     }
 
     @Override
     protected void onPause() {
-        SelfInstaller.uiVisible = false;
         handler.removeCallbacks(ticker);
         super.onPause();
     }
@@ -1128,23 +1126,11 @@ public class MainActivity extends Activity {
     private int tickCount;
 
     private void installUpdate() {
-        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
-            Toast.makeText(this, "សូមអនុញ្ញាត \"Install unknown apps\" រួចចុចដំឡើងម្ដងទៀត", Toast.LENGTH_LONG).show();
-            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:" + getPackageName())));
-            return;
-        }
-        Toast.makeText(this, "កំពុងដំឡើង… App នឹងបិទ ហើយបើកវិញដោយខ្លួនឯង", Toast.LENGTH_LONG).show();
-        new Thread(() -> {
-            try {
-                SelfInstaller.install(this, ApkProvider.file(this));
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    try { startActivity(ApkProvider.installIntent()); }
-                    catch (Exception e2) { Toast.makeText(this, "បើកមិនបាន", Toast.LENGTH_SHORT).show(); }
-                });
-            }
-        }).start();
+        String url = Library.prefs(this).getString(Updater.KEY_PENDING_APK, null);
+        if (url == null || !url.startsWith("http")) url = "https://github.com/" + Updater.GITHUB_REPO + "/releases/latest";
+        Toast.makeText(this, "ទាញយកក្នុង Browser រួចបើក File GoenkaPlayer.apk ដើម្បីដំឡើង", Toast.LENGTH_LONG).show();
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (Exception e) { Toast.makeText(this, "បើក Browser មិនបាន", Toast.LENGTH_SHORT).show(); }
     }
 
     private void refreshUpdateInfo() {
@@ -1164,14 +1150,13 @@ public class MainActivity extends Activity {
         if (tag != null) {
             try { tagNum = Long.parseLong(tag.substring(tag.lastIndexOf('.') + 1)); } catch (Exception ignored) {}
         }
-        if (tagNum > Updater.currentVersion(this) && ApkProvider.file(this).exists()) {
-            installBtn.setText("⬇️  ដំឡើងកំណែថ្មី " + tag);
+        if (tagNum > Updater.currentVersion(this)) {
+            installBtn.setText("⬇️  ទាញយកកំណែថ្មី " + tag);
             installBtn.setVisibility(View.VISIBLE);
         } else {
             installBtn.setVisibility(View.GONE);
             if (tag != null) {
                 Library.prefs(this).edit().remove(Updater.KEY_PENDING_TAG).remove(Updater.KEY_PENDING_APK).apply();
-                ApkProvider.file(this).delete();
             }
         }
     }

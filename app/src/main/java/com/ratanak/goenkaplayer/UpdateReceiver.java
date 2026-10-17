@@ -23,7 +23,6 @@ public class UpdateReceiver extends BroadcastReceiver {
             Library.prefs(c).edit().remove(Updater.KEY_PENDING_TAG).remove(Updater.KEY_PENDING_APK)
                     .putString(Updater.KEY_LAST_MSG, "App: បាន Update ទៅ v" + Updater.currentVersionName(c) + " ហើយ")
                     .apply();
-            ApkProvider.file(c).delete();
             android.app.PendingIntent open = android.app.PendingIntent.getActivity(c, 43,
                     new Intent(c, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE);
             SelfInstaller.post(c, "Goenka Player", "✅ បាន Update ទៅ v" + Updater.currentVersionName(c) + " ហើយ", open);
